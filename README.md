@@ -8,3 +8,5 @@ The code is included in three separate .Rmd files. The first part allows the use
 Information on packages needed to run the code is included in the .Rmd:s.
 
 For questions regarding the code or manuscript, please contact S Ekroos (sofie (dot) ekroos (at) helsinki (dot) fi).
+
+Old version control available in https://github.com/FRCBS/iron_measurement_comparisons
