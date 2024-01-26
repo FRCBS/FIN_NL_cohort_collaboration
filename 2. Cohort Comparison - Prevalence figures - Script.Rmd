@@ -1,6 +1,6 @@
 ---
 title: "Prevalence of iron deficiency"
-author: "Mikko Arvas"
+author: "Jan Karregat"
 date: "`r Sys.time()`"
 output:
   html_document: default
