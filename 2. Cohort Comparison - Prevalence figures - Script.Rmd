@@ -1,0 +1,466 @@
+---
+title: "Prevalence of iron deficiency"
+author: "Mikko Arvas"
+date: "`r Sys.time()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+Sys.setlocale("LC_MESSAGES", 'en_GB.UTF-8')
+Sys.setenv(LANG = "en_US.UTF-8")
+
+knitr::opts_chunk$set(
+        echo = FALSE,
+        message = FALSE,
+        warning = FALSE
+)
+
+currentDate <- format(Sys.time(), "%Y-%m-%d")
+FolderName <- paste("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/3. R Plots/", currentDate,sep="")
+dir.create(FolderName)
+
+
+library(lubridate)
+library(plyr)
+library(readr)
+library(nFactors)
+library(psych)
+library(corrplot)
+library(psych)
+library(ggplot2)
+library(tidyverse)
+library(ggthemes)
+library(haven)
+library(rsample)
+library(broom)
+library(scales)
+library(kableExtra)
+library(boot)
+library(naniar)
+library(haven)
+library(foreign)
+library(tidyverse)
+library(tableone)
+library(stargazer)
+library(gridExtra)
+library(cowplot)
+library(broom)
+library(GGally)
+library(ggfortify)
+library(knitr)
+library(lubridate)
+library(car)
+library(reshape2)
+library(sfsmisc)
+library(MASS)
+library(ordinal)
+library(sjmisc)
+library(VIM)
+library(epiDisplay)
+library(epitools)
+library(ez)
+library(ggbeeswarm)
+library(ggthemes)
+library(rsample)
+library(broom)
+library(scales)
+library(kableExtra)
+library(boot)
+library(readxl)
+library(foreign)
+library(corrr)
+library(ggcorrplot)
+library(tidylog, warn.conflicts = F)
+```
+
+Based on Muriel Lobier's https://github.com/FRCBS/iron_measurement_comparisons/blob/master/src/iron_deficiency_rates_example.Rmd 
+
+# Summary
+In this document we calculate for Dutch Cohorts:
+
+- describe the amount of ferritin data
+- descriptive statistics on ferritin levels 
+- iron deficiency (Ferritin < 15 \(\mu\)g/L) rates in the donor population per 5 year age groups.
+
+# Ferritin data loading and preprocessing
+```{r}
+Ferritin_Stats_NL <- readRDS("C://Users//karre01j//OneDrive - Sanquin//A FORTE//A3 Collaboration Finland//1. Cohort Comparison Analysis//2. Analysis [R]//2. R Datasets//1. Cohort Comparison - Merged Cohorts.rds")
+
+
+data <- Ferritin_Stats_NL %>% filter(Cohort != "NES")
+data <- Ferritin_Stats_NL %>% filter(Cohort != "HELIUS")
+
+
+```
+
+
+# Adjustments to data set for analysis
+```{r}
+# Rename variable
+names(data)[names(data) == "Ferritin"] <- "ferritin"
+names(data)[names(data) == "Age"] <- "age"
+names(data)[names(data) == "Sex"] <- "sex"
+names(data)[names(data) == "Cohort"] <- "cohort"
+names(data)[names(data) == "CurrentOCC"] <- "Oral contraception"
+names(data)[names(data) == "Pregnancy"] <- "Childbirth"
+
+#Remove spaces
+data$cohort <- gsub(" .*","",data$cohort)
+
+# Order factor variables
+levels(data$sex) <- list(Men = "male", Women = "female")
+
+# Add iron deficiency variable
+data <- data %>% mutate(Iron_Deficiency = (ifelse(ferritin < 16, "Yes", "No")))
+```
+
+
+
+The code expects a data-frame with one row per donor. The columns are donor (donor ID), ferritin, age, and sex.
+
+We remove new donors from the data since we are mainly interested in the prevalence in iron deficiency in repeat donors. As our dataset was not large, we could not stratify by previous donation frequency as is probably advisable (e.g., re-activated donors, low frequency donors and high frequency donors).
+
+We will stratify by 5-year age groups and sex to compute the prevalence of iron deficiency
+
+```{r }
+data_for_modeling <-
+  data %>% 
+  mutate(age_group = case_when(age < 25 ~ "18-24",
+                               age < 30 ~ "25-29",
+                               age < 35 ~ "30-34",
+                               age < 40 ~ "35-39",
+                               age < 45 ~ "40-44",
+                               age < 50 ~ "45-49",
+                               age < 55 ~ "50-54",
+                               age < 60 ~ "55-59",
+                               age < 65 ~ "60-64",
+                               TRUE ~ "65-70"))
+```
+
+
+
+
+# Table 1 Ferritin
+```{r}
+# Create iron deficiency variable
+summary_all_cohorts <- data %>% 
+  mutate(Iron_Deficiency = ferritin < 15)
+
+# Round numeric data to one decimal for table 1.
+numeric_columns <- sapply(summary_all_cohorts, is.numeric)
+summary_all_cohorts[, numeric_columns] <- round(summary_all_cohorts[, numeric_columns], 1)
+
+# Select variables for Table 1. 
+myVars <- c("age", "blood_volume", "ferritin", "Iron_Deficiency", "Smoking", "Childbirth", "Menstruation",
+            "Oral contraception", "Donation_Freq_2YearsPrior", "DaysToPreviousFB"
+)
+non_normal_vars <- c("ferritin")
+
+Table1Data <- summary_all_cohorts
+Summary_Table1 <- CreateTableOne(data = 
+                                  Table1Data,
+                                  vars=myVars,
+                                  strata = c("cohort","Group"),
+                                  test = FALSE)
+
+tab3Mat <- print(Summary_Table1,
+                  nonnormal = non_normal_vars,
+                  vars = myVars,
+                  quote = FALSE,
+                  noSpaces = TRUE,
+                  printToggle = FALSE)
+ 
+ colnames(tab3Mat) <- gsub("\\:",": ",colnames(tab3Mat))
+ tab3Mat
+ 
+ write.table(tab3Mat, "C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/3B. Cohort Comparison - Dutch Summary Data - Table 1.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = TRUE)
+ 
+tab3Mat %>% 
+  kable() %>% 
+kable_styling(
+  full_width = F,
+  bootstrap_options = "striped", 
+  font_size = 8)#%>% 
+  #column_spec(column = 4:5, width = '2.5cm') 
+
+  write.table(tab3Mat, 
+              file = paste0("Table 1 text"),sep="/t")
+  
+```
+
+
+# Histogram of ferritin
+```{r}
+# Adjust variable values for histograms plot
+Histogram_Data <- data_for_modeling
+Histogram_Data$cohort <- gsub("DISIII", "Blood donors", Histogram_Data$cohort)
+Histogram_Data$cohort <- gsub("PREVEND", "General population", Histogram_Data$cohort)
+Histogram_Data$cohort <- gsub("NEW", "New blood donors", Histogram_Data$cohort)
+Histogram_Data$Group <- gsub("Women_Premenopausal", "Women \u226450 years", Histogram_Data$Group)
+Histogram_Data$Group <- gsub("Women_Postmenopausal", "Women >50 years", Histogram_Data$Group)
+Histogram_Data$Group <- factor(Histogram_Data$Group, levels = c("Men", "Women \u226450 years", "Women >50 years"))
+Histogram_Data$cohort <- factor(Histogram_Data$cohort, levels = c("Blood donors", "General population", "New blood donors"))
+
+
+Histogram_Data <- Histogram_Data %>%
+  group_by(cohort, Group) %>%
+  mutate(Median_Fer = median(ferritin, na.rm = TRUE))
+  
+# Create histogram plot
+p <- ggplot(Histogram_Data, aes(x = ferritin, fill = cohort)) +
+  scale_fill_manual(values=c("red", "blue", "green"))+
+  geom_histogram(position = "dodge",alpha = 0.4, bins = 23) +
+  scale_x_log10(limits = c(3, 300)) +
+  ylab("Frequency") +
+  xlab("Ferritin (ug/L)") +
+  facet_grid(cohort ~ Group) +
+  theme_classic() +
+  theme(
+    axis.text.y.left = element_text(size = 12),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 18),
+    axis.title.y.left = element_text(vjust = 1.5, size = 18),
+    strip.text = element_text(size = 18),  
+    strip.text.x = element_text(size = 18),
+    legend.position = "none"
+  )  +
+  geom_vline(data = Histogram_Data, aes(xintercept = Median_Fer), color = "darkblue", linetype = "dashed") +
+  geom_vline(aes(xintercept = 15), color = "red")
+
+
+print(p)
+
+
+FileName <- paste(FolderName, "/Histograms - Ferritin Distribution.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+
+```
+
+
+
+# Proportion of iron deficiency
+We compute the bootstrap distribution of the iron deficiency prevalence.
+
+```{r boot, message=FALSE}
+options("tidylog.display" = list())
+######################################################################
+# Write function that computes ID prevalence in bootstrapped sample
+######################################################################
+
+get_proportions <- function(split){
+     analysis(split) %>% 
+      group_by(age_group ) %>% 
+      summarise(ID_proportion = mean(ferritin < 15)) %>% 
+     ungroup() %>% 
+    rename(term= age_group,
+           estimate= ID_proportion)
+}
+
+######################################################################
+# Compute bootstrapped samples for women
+######################################################################
+set.seed(215)
+boot.times <- 1000
+
+
+boot_dis_wo <- bootstraps(data_for_modeling %>%
+                            filter(
+                              sex == "Women" &
+                              cohort == "DISIII"),
+                          times = boot.times,
+                          strata = "age_group",
+                          apparent = TRUE)
+
+boot_dis_wo_prop <-
+  boot_dis_wo %>%
+  mutate(props = map(splits, get_proportions))
+
+
+boot_pr_wo <- bootstraps(data_for_modeling %>% 
+                          filter(
+                            sex == "Women" & 
+                              cohort == "PREVEND"),
+                        times = boot.times,
+                        strata = "age_group",
+                        apparent = TRUE)
+
+
+boot_pr_wo_prop <- 
+  boot_pr_wo %>% 
+    mutate(props = map(splits, get_proportions)) 
+
+
+boot_new_wo <- bootstraps(data_for_modeling %>%
+                            filter(
+                              sex == "Women" &
+                              cohort == "NEW"),
+                          times = boot.times,
+                          strata = "age_group",
+                          apparent = TRUE)
+
+boot_new_wo_prop <-
+  boot_new_wo %>%
+  mutate(props = map(splits, get_proportions))
+  
+  
+
+########################################################
+# Compute bootstrapped samples for men
+########################################################
+
+boot_dis_me <- bootstraps(data_for_modeling %>% 
+                          filter(
+                            sex == "Men" & 
+                              cohort == "DISIII"),
+                        times = boot.times,
+                        strata = "age_group",
+                        apparent = TRUE)
+
+
+boot_dis_me_prop <- 
+  boot_dis_me %>% 
+    mutate(props = map(splits, get_proportions)) 
+
+
+boot_pr_me <- bootstraps(data_for_modeling %>% 
+                          filter(
+                            sex == "Men" & 
+                              cohort == "PREVEND"),
+                        times = boot.times,
+                        strata = "age_group",
+                        apparent = TRUE)
+
+boot_pr_me_prop <- 
+  boot_pr_me %>% 
+    mutate(props = map(splits, get_proportions)) 
+
+
+boot_new_me <- bootstraps(data_for_modeling %>%
+                            filter(
+                              sex == "Men" &
+                              cohort == "NEW"),
+                          times = boot.times,
+                          strata = "age_group",
+                          apparent = TRUE)
+
+boot_new_me_prop <-
+  boot_new_me %>%
+  mutate(props = map(splits, get_proportions))
+
+
+options("tidylog.display" = NULL)
+```
+
+We compute and plot the prevalence and its 95% percentile confidence intervals  and save the figure externally if needed. 
+
+```{r }
+
+####################################################################################
+## Compute percentile 95% confidence intervals from bootstrapped distribution
+####################################################################################
+
+figure_data <- int_pctl(boot_dis_wo_prop, props) %>% 
+  mutate(sex = "Women",cohort="DIS") %>% 
+  bind_rows(int_pctl(boot_dis_me_prop, props) %>% 
+  mutate(sex = "Men",cohort="DIS") ) %>% 
+  bind_rows(int_pctl(boot_pr_wo_prop, props) %>% 
+  mutate(sex = "Women",cohort="PREVEND") ) %>% 
+  bind_rows(int_pctl(boot_pr_me_prop, props) %>% 
+  mutate(sex = "Men",cohort="PREVEND") ) %>%   
+  bind_rows(int_pctl(boot_new_wo_prop, props) %>%
+  mutate(sex = "Women",cohort="NEW") ) %>% 
+  bind_rows(int_pctl(boot_new_me_prop, props) %>% 
+  mutate(sex = "Men",cohort="NEW") ) 
+
+```
+
+
+
+
+
+```{r fig.width=10}  
+## plot prevalence and 95%CI of prevalence fir each 5 year age group
+figure  <- ggplot(figure_data,aes(x = term, y = .estimate, ymin = .lower, ymax = .upper)) +
+ geom_crossbar(alpha = 0.35, 
+            fill = "grey",
+            color = "dark grey") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     breaks = seq(0,.8, by = 0.05)) +
+  facet_grid(sex~cohort) +
+    theme_few() +
+  xlab("Age") +
+  ylab("Prevalence of iron deficiency") +
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 10),
+        strip.text =  element_text(size = 16),
+        axis.text.x = element_text(angle = 90)
+        )
+
+figure
+
+####################################################################################
+## Save figure
+####################################################################################
+ggsave(filename = "G:\\Donorstudies\\Onderzoek\\FORTE\\A3 Collaboration Finland\\A Collaboration documents\\B4 Documents for R analysis\\R Scripts\\Iron deficiency analysis\\age_risk_ID.png",
+        plot = figure, 
+      width = 10,
+      height = 15,
+      dpi = 300,
+      units = "cm")
+```
+
+# Remove DISIII age group 18-24 and HELIUS
+```{r}
+
+figure_data <- figure_data[!(figure_data$cohort == "DIS" & figure_data$term == "18-24" & figure_data$sex == "Women"), ]
+figure_data_2 <- figure_data
+```
+
+## Bootstrapped all cohorts together
+```{r fig.width=10}  
+
+figure_data_2$cohort <- gsub("PREVEND", "General population", figure_data_2$cohort)
+figure_data_2$cohort <- gsub("NEW", "New blood donors", figure_data_2$cohort)
+figure_data_2$cohort <- gsub("DIS", "Blood donors", figure_data_2$cohort)
+figure_data_2$cohort  <- factor(figure_data_2$cohort, levels = c("Blood donors", "General population", "New blood donors"))
+
+
+figure  <- ggplot(figure_data_2, aes(x = term, y = .estimate, ymin = .lower, ymax = .upper, fill = cohort))  +
+  scale_fill_manual(values=c("red", "blue", "green")) +
+ geom_crossbar(alpha = 0.40, 
+                        color = "dark gray") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     breaks = seq(0,.8, by = 0.05)) +
+  facet_grid(~sex) +
+    theme_few() +
+  xlab("Age") +
+  ylab("Prevalence of iron deficiency") +
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 10),
+        strip.text =  element_text(size = 16),
+        axis.text.x = element_text(angle = 90)
+        ) +
+  labs(fill = "")
+
+figure
+
+FileName <- paste(FolderName, "/Bargraph - Prevalence ID.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+figure_data_2$Country <- "DUTCH"
+
+saveRDS(figure_data_2, file.path("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/", "4A. Cohort Comparison - Dutch Summary Data - Prevalence plot.rds"))
+
+```
+
+
+
+```{r}
+
+```
+
+

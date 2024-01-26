@@ -1,0 +1,835 @@
+---
+title: "Cohort Comparison - Cohort Preparation"
+author: "Jan Karregat"
+date: "19.10.2023"
+output: github_document
+bibliography: index.bib
+---
+
+Based on Muriel Lobier's original code (https://github.com/FRCBS/iron_levels_of_blood_donors/blob/master/src/index.Rmd)
+
+# Summary
+
+This document includes all codes necessary to run the analysis of and produce the figures for the 5 Dutch Cohorts (DISIII, PREVEND, NEW Donors, and Helius). The code allows the user to describe the cohorts and build a summary table that can be used in further regression analysis.
+
+```{r setup, , message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(naniar)
+library(haven)
+library(foreign)
+library(tidyverse)
+library(tableone)
+library(stargazer)
+library(gridExtra)
+library(cowplot)
+library(broom)
+library(GGally)
+library(ggfortify)
+library(knitr)
+library(lubridate)
+library(car)
+library(sfsmisc)
+library(MASS)
+library(ordinal)
+library(sjmisc)
+library(epiDisplay)
+#library(safeBinaryRegression)
+library(epitools)
+library(ez)
+library(ggbeeswarm)
+#install.packages("tidymodels")
+#library(tidymodels)
+library(ggthemes)
+library(rsample)
+library(broom)
+library(scales)
+library(kableExtra)
+library(boot)
+library(readxl)
+library(tidylog, warn.conflicts = F)
+```
+
+## Data loading
+We have two cohorts with blood donors, DIS III and NEW Donors, and three general population cohorts, PREVEND, HELIUS
+
+```{r , warning=FALSE}
+# Load DIS III data 
+DataDis <- read.spss(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/1. Preparation [SPSS]/2. Datasets/1. Cohort Comparison - DIS III - Dataset.sav", to.data.frame=T)
+
+# Load NEW Donor data
+DataNEW <- read.spss(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/1. Preparation [SPSS]/2. Datasets/3. Cohort Comparison - NEW Donors - Dataset.sav", to.data.frame=T)
+
+# Load PREVEND data
+DataPrev <- read.spss(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/1. Preparation [SPSS]/2. Datasets/2. Cohort Comparison - PREVEND - Dataset.sav", to.data.frame=T)
+
+# Load HELIUS data
+DataHELIUS <- read.spss(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/1. Preparation [SPSS]/2. Datasets/5. Cohort Comparison - HELIUS - Dataset.sav", to.data.frame=T)
+```
+
+## Data preparation
+First we assign study participants to their cohorts.
+```{r}
+# Create Cohort variable
+DataDis$Cohort <- c("DISIII")
+DataPrev$Cohort <- c("PREVEND")
+DataNEW$Cohort <- c("NEW")
+DataHELIUS$Cohort <- c("HELIUS")
+
+# Adjust Hb (g/dL) and create empty Menstruation variable for NEW
+DataDis$Hb <- DataDis$Hb/16.113
+DataDis$Hb <- DataDis$Hb*1.6113
+DataNEW$Hb <- DataNEW$Hb*1.6113
+DataPrev$Hb <- DataPrev$Hb*1.6113
+names(DataHELIUS)[names(DataHELIUS) == "H2_Lab_UitslagHEMO"] <- "Hb"
+DataHELIUS$Hb <- as.numeric(as.character(DataHELIUS$Hb))
+DataHELIUS$Hb <- DataHELIUS$Hb*1.6113
+
+# Filter for whole blood donors or donors with at least 1 whole blood donation in last 2 years
+DataDis <- DataDis %>% filter(DonorType_PriorDIS == "V" | FreqDonatie2Jaar > 0)
+
+# Random sample from NEW Donors while dataset is disproportional big
+DataNEW <- DataNEW %>% sample_frac(0.10)
+
+# Determine number of unique cases
+DataDis %>% distinct(KeyID) %>% nrow()
+DataPrev %>% distinct(PK) %>% nrow()
+DataNEW %>% distinct(ID) %>% nrow()
+DataHELIUS %>% distinct(ID) %>% nrow()
+```
+
+## We adjust variable names and add blood volume to all cohorts
+```{R}
+# DIS
+names(DataDis)[names(DataDis) == "KeyID"] <- "ID"
+DataDis$Sex <- gsub("(?i)\\bFemale\\b", "Women", DataDis$Sex)
+DataDis$Sex <- gsub("(?i)\\bMale\\b", "Men", DataDis$Sex)
+names(DataDis)[names(DataDis) == "DagenLaatsteDonatie"] <- "DaysToPreviousFB"       # Whole blood donation
+names(DataDis)[names(DataDis) == "FreqDonatie2Jaar"] <- "Donation_Freq_2YearsPrior" # Whole blood donations
+DataDis <- DataDis %>% mutate(Donation_Freq_2YearsPrior = (ifelse(is.na(Donation_Freq_2YearsPrior), 0, Donation_Freq_2YearsPrior)))
+DataDis$Smoking <- gsub("Nee, nooit", "No", DataDis$Smoking)
+DataDis$Smoking <- gsub("Nee, maar wel gerookt", "No", DataDis$Smoking)
+DataDis$Smoking <- gsub("Ja", "Yes", DataDis$Smoking)
+DataDis$Smoking <- as.factor(DataDis$Smoking)
+DataDis$Pregnancy <- gsub("Ja", "Yes", DataDis$Pregnancy)
+DataDis$Pregnancy <- gsub("Nee", "No", DataDis$Pregnancy)
+DataDis$Pregnancy <- as.factor(DataDis$Pregnancy)
+names(DataDis)[names(DataDis) == "OCC_Pill"] <- "CurrentOCC"
+DataDis$CurrentOCC <- gsub("Ja, ooit", "No", DataDis$CurrentOCC)
+DataDis$CurrentOCC <- gsub("Ja, nu", "Yes", DataDis$CurrentOCC)
+DataDis <- DataDis %>% mutate(CurrentOCC = (ifelse(Contraception == "Nee", "No", CurrentOCC)))
+DataDis$CurrentOCC <- as.factor(DataDis$CurrentOCC)
+
+# PREVEND
+names(DataPrev)[names(DataPrev) == "PK"] <- "ID"
+DataPrev$Sex <- gsub("(?i)\\bfemale\\b", "Women", DataPrev$Sex)
+DataPrev$Sex <- gsub("(?i)\\bmale\\b", "Men", DataPrev$Sex)
+DataPrev$Smoking <- gsub("Yes, still", "Yes", DataPrev$Smoking)
+DataPrev$Smoking <- gsub("Yes, stopped > 1 year", "No", DataPrev$Smoking)
+DataPrev$Smoking <- gsub("Yes, stopped < 1year", "No", DataPrev$Smoking)
+DataPrev$Smoking <- gsub("No", "No", DataPrev$Smoking)
+DataPrev$Smoking <- as.factor(DataPrev$Smoking)
+DataPrev$CurrentOCC <- as.factor(DataPrev$CurrentOCC)
+
+# NEW
+DataNEW$Sex <- gsub("\\bM\\b", "Men", DataNEW$Sex)
+DataNEW$Sex <- gsub("\\bF\\b", "Women", DataNEW$Sex)
+DataNEW$Menstruation <- NA
+
+
+# HELIUS
+names(DataHELIUS)[names(DataHELIUS) == "H1_geslacht"] <- "Sex"
+DataHELIUS$Sex <- gsub("vrouw", "Women", DataHELIUS$Sex)
+DataHELIUS$Sex <- gsub("man", "Men", DataHELIUS$Sex)
+names(DataHELIUS)[names(DataHELIUS) == "H1_lft"] <- "Age"
+names(DataHELIUS)[names(DataHELIUS) == "H1_LftMenstrWeg"] <- "Menopause_Age"
+DataHELIUS$Menopause_Age <- as.numeric(as.character(DataHELIUS$Menopause_Age))
+names(DataHELIUS)[names(DataHELIUS) == "H1_MenstrNu"] <- "Menstruation"
+DataHELIUS$Menstruation <- gsub("Ja", "Yes", DataHELIUS$Menstruation)
+DataHELIUS$Menstruation <- gsub("Nee", "No", DataHELIUS$Menstruation)
+names(DataHELIUS)[names(DataHELIUS) == "H1_Bevallen"] <- "Pregnancy"
+DataHELIUS$Pregnancy <- gsub("Ja", "Yes", DataHELIUS$Pregnancy)
+DataHELIUS$Pregnancy <- gsub("Nee", "No", DataHELIUS$Pregnancy)
+names(DataHELIUS)[names(DataHELIUS) == "H1_VegaHoeveel"] <- "NoMeat_DaysPerWeek"
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("Nooit", "0", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("Minder dan 1 dag per week", "<1", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("1 dag per week", "1", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("2 dagen per week", "2", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("3 dagen per week", "3", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("4 dagen per week", "4", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("5 dagen per week", "5", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("6 dagen per week", "6", DataHELIUS$NoMeat_DaysPerWeek)
+DataHELIUS$NoMeat_DaysPerWeek <- gsub("7 dagen per week", "7", DataHELIUS$NoMeat_DaysPerWeek)
+names(DataHELIUS)[names(DataHELIUS) == "H2_Roken_H1combined"] <- "Smoking"
+DataHELIUS$Smoking <- gsub("Nee, nooit gerookt", "No", DataHELIUS$Smoking)
+DataHELIUS$Smoking <- gsub("Nee, maar vroeger wel", "No", DataHELIUS$Smoking)
+DataHELIUS$Smoking <- gsub("Ja", "Yes", DataHELIUS$Smoking)
+names(DataHELIUS)[names(DataHELIUS) == "H2_LO_GemGewicht"] <- "Weight"
+DataHELIUS$Weight <- as.numeric(as.character(DataHELIUS$Weight))
+names(DataHELIUS)[names(DataHELIUS) == "H2_LO_GemLengte"] <- "Length"
+DataHELIUS$Length <- as.numeric(as.character(DataHELIUS$Length))
+DataHELIUS$Length <- DataHELIUS$Length/100 # Length in meters
+names(DataHELIUS)[names(DataHELIUS) == "H2_LO_BMI"] <- "BMI"
+DataHELIUS$BMI <- as.numeric(as.character(DataHELIUS$BMI))
+names(DataHELIUS)[names(DataHELIUS) == "H2_DM_Self_H1combined"] <- "Diabetes"
+names(DataHELIUS)[names(DataHELIUS) == "H2_Lab_UitslagEFER"] <- "Ferritin"
+DataHELIUS$Ferritin <- as.numeric(as.character(DataHELIUS$Ferritin))
+names(DataHELIUS)[names(DataHELIUS) == "H2_Lab_UitslagCRPR"] <- "CRP"
+DataHELIUS$CRP <- as.numeric(as.character(DataHELIUS$CRP))
+names(DataHELIUS)[names(DataHELIUS) == "H1_Anticon2"] <- "CurrentOCC"
+DataHELIUS$CurrentOCC <- gsub("Ja", "Yes", DataHELIUS$CurrentOCC)
+DataHELIUS$CurrentOCC <- gsub("Niet geselecteerd", "No", DataHELIUS$CurrentOCC)
+DataHELIUS$CurrentOCC <- as.factor(DataHELIUS$CurrentOCC)
+
+```
+
+# Blood Volume
+```{r}
+# Creat blood volum variable (Nadler’s equation)
+calculate_blood_volume <- function(data) {
+  data$blood_volume <- ifelse(data$Sex == "Women", (0.3561*data$Length^3) + (0.03308*data$Weight) + 0.1833, NA)
+  data$blood_volume <- ifelse(data$Sex == "Men", (0.3669*data$Length^3) + (0.03219*data$Weight) + 0.6041, data$blood_volume)
+  return(data)
+}
+
+# Use for all dataset
+DataDis <- calculate_blood_volume(DataDis)
+DataPrev <- calculate_blood_volume(DataPrev)
+DataNEW <- calculate_blood_volume(DataNEW)
+DataHELIUS <- calculate_blood_volume(DataHELIUS)
+```
+
+There are "cohort_name %>% distinct(ID_variable) %>% nrow()" individials enrolled in the studies. 
+
+
+  * DIS III:   `r DataDis %>% distinct(KeyID) %>% nrow()`
+  * PREVEND:   `r DataPrev %>% distinct(PK) %>% nrow()`
+  * PREVEND:   `r DataNEW %>% distinct(ID) %>% nrow()`
+        
+Once we remove participants that have no ferritin or no Hb measurement data (and for blood donors for any donation event) there are `r cohort_name %>%  filter(!is.na(Ferritin) & !is.na(Hb_v) ) %>% distinct(ID_variable) %>% nrow()` participants left  
+
+  * DIS III:    `r DataDis %>%  filter(!is.na(Ferritin) & !is.na(Hb) )                     %>% distinct(KeyID) %>% nrow()`
+  * PREVEND:    `r DataPrev %>%  filter(!is.na(Ferritin) & !is.na(Hb) )                     %>% distinct(PK) %>% nrow()`
+
+```{r , warning=FALSE}
+DataDis %>%  filter(!is.na(Ferritin) & !is.na(Hb) ) %>% distinct(ID) %>% nrow()
+DataPrev %>%  filter(!is.na(Ferritin) & !is.na(Hb) ) %>% distinct(ID) %>% nrow()
+DataNEW %>%  filter(!is.na(Ferritin) & !is.na(Hb) ) %>% distinct(ID) %>% nrow()
+DataHELIUS %>%  filter(!is.na(Ferritin) & !is.na(Hb) ) %>% distinct(ID) %>% nrow()
+```
+# Create datasets with variables of interest
+Get values for first study donation with the required measurements donation (regardless of donation type)
+We remove events with no Ferritin and Hb to be in line with the nb of previous donations were counted.
+```{r , warning=FALSE}
+#                           DIS III
+DataDis_Summary <- DataDis %>% 
+  group_by(ID) %>% 
+  summarise(Sex=first(Sex)) 
+
+DIS_data_summary <- DataDis %>%  
+  dplyr::select(ID, Age, Sex, Ferritin, Hb, Cohort, Weight, BMI, Menstruation, CurrentOCC, Smoking, DaysToPreviousFB, Donation_Freq_2YearsPrior, TotalDonationPriorDIS, Alcohol, Diet, TotalIron, HemeIron, NonHemeIron, Pregnancy, blood_volume, Donation5YearPriorDIS) %>% 
+  ungroup()
+
+DIS_data_summary %>% distinct(ID) %>% nrow()
+
+
+# NEW
+DataNEW_Summary <- DataNEW %>% 
+  group_by(ID) %>% 
+  summarise(Sex=first(Sex)) 
+
+NEW_data_summary <- DataNEW %>%  
+  dplyr::select(ID, Age, Cohort, Sex, Ferritin, Hb, Weight, Length, BMI, Menstruation, blood_volume) %>% 
+  ungroup()
+
+
+# PREVEND 
+PREV_data_summary <- DataPrev %>% 
+  group_by(ID) %>% 
+  summarise(Sex=first(Sex)) 
+
+PREV_data_summary <- DataPrev %>%
+  group_by(ID) %>%
+  dplyr::select(ID, Age, Sex, Cohort, Ferritin, Hb, Weight, BMI, Menstruation, Smoking, CurrentOCC, CurrentOCCForContraception, Pregnancy, UlcurTreatment, blood_volume) %>%
+  ungroup()
+
+PREV_data_summary %>% distinct(ID) %>% nrow()
+
+
+#                           HELIUS
+HELIUS_data_summary <- DataHELIUS %>% 
+  group_by(ID) %>% 
+  summarise(Sex=first(Sex)) 
+  
+HELIUS_data_summary <- DataHELIUS %>%
+  group_by(ID) %>%
+  dplyr::select(ID, Age, Sex, Cohort, Ferritin, Hb, Weight, BMI, Menstruation, Menopause_Age, Smoking, CRP, blood_volume, Pregnancy, CurrentOCC, NoMeat_DaysPerWeek, Diabetes) %>%
+  ungroup()
+```
+
+
+
+## Demographic group specification and assignment 
+
+In this section we assign women to period/no period groups. The menstruation question was similar in three cohorts (DIS, PREVEND, New Donors). However no menstruation data is available for the NEW donors:
+
+There are `r cohort_summary_name %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()` women with no  answer to the question regarding their menstrual status. 
+
+  * DISIII:   `r DIS_data_summary %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  * NEW:      `r NEW_data_summary %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  * PREVEND:  `r PREV_data_summary %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+
+# Menopausal status: DIS
+```{r}
+# Create Menopause variable
+DIS_data_summary <- DIS_data_summary %>% 
+  mutate(Menopause = case_when(
+   (Age > 50) ~ "postmenopausal",
+   (Age <= 50) ~ "premenopausal"
+    ))
+
+```
+
+# Menopausal status: PREVEND
+```{r}
+# Create Menopause variable
+PREV_data_summary <- PREV_data_summary %>% 
+  mutate(Menopause = case_when(
+   (Age > 50) ~ "postmenopausal",
+   (Age <= 50) ~ "premenopausal"
+    ))
+
+PREV_data_summary$Menopause <- as.factor(PREV_data_summary$Menopause)
+```
+
+# Menopausal status: NEW [only based on age]
+```{r}
+# Create Menopause variable
+ NEW_data_summary <- NEW_data_summary %>%
+  mutate(Menopause = case_when(
+   (Age > 50) ~ "postmenopausal",
+   (Age <= 50) ~ "premenopausal"
+    ))
+
+NEW_data_summary$Menopause <- as.factor(NEW_data_summary$Menopause)
+```
+
+
+# Menopausal status: HELIUS
+```{r}
+# Create Menopause variable
+ HELIUS_data_summary <- HELIUS_data_summary %>% 
+  mutate(Menopause = case_when(
+   (Age > 50) ~ "postmenopausal",
+   (Age <= 50) ~ "premenopausal"
+    ))
+
+HELIUS_data_summary$Menopause <- as.factor(HELIUS_data_summary$Menopause)
+
+```
+
+# Menstruation DIS
+```{r}
+# Remove pregnant women
+names(DIS_data_summary)[names(DIS_data_summary) == "Menstruation"] <- "MenstruationFULL"
+DIS_data_summary <- DIS_data_summary %>% filter(MenstruationFULL != "Nee, ik ben zwanger (geweest)" | is.na(MenstruationFULL))
+
+#Adjust Menstruation to dichotomous variable
+DIS_data_summary <- DIS_data_summary %>% 
+  mutate(Menstruation = case_when(
+    MenstruationFULL == "Nee, vanwege overgang" ~ "No", # women who report menopause to postmenopausal group
+    MenstruationFULL == "Ja" ~ "Yes", # women who report menstruation to premenopausal group
+    MenstruationFULL == "Nee, om een andere reden" ~ "No", # women >= 45 with no menstruation due to other reason to postmenopausal group
+    Sex == "Men" ~ NA, # Men
+   )) 
+
+
+table(DIS_data_summary$Menopause,DIS_data_summary$Menstruation)
+
+```
+
+# Menstruation: PREVEND
+```{r}
+#Adjust Menstruation to dichotomous variable
+names(PREV_data_summary)[names(PREV_data_summary) == "Menstruation"] <- "MenstruationFULL"
+ PREV_data_summary <- PREV_data_summary %>% 
+  mutate(Menstruation = case_when(
+    MenstruationFULL == "Yes" ~ "Yes", 
+    MenstruationFULL == "No, not anymore" ~ "No"
+    ))
+
+ table(PREV_data_summary$Menopause,PREV_data_summary$Menstruation)
+
+```
+
+# Menstruation: HELIUS
+```{r}
+# Menstruation is already dichotomous
+# HELIUS_data_summary$Menopause <- as.factor(HELIUS_data_summary$Menopause)
+
+# Determine NA's Menstruation
+# HELIUS_data_summary %>%
+#   filter(Sex == "Women" & is.na(Menstruation)) %>%
+#   summarize(count = n())
+```
+
+
+# Create Group variable [Men, Pre- and Postmenopausal Women]
+```{r}
+# DIS
+DIS_data_summary_final <- DIS_data_summary %>% 
+  mutate(Group = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & (Menopause == "postmenopausal") ~ "Women_Postmenopausal",
+    Sex == "Women" & (Menopause == "premenopausal") ~ "Women_Premenopausal",
+    TRUE ~ "NA")) %>% 
+  mutate(Group = ordered(Group, levels =  c("Women_Premenopausal", "Women_Postmenopausal", "Men"))) 
+
+# NEW
+NEW_data_summary_final <- NEW_data_summary %>% 
+  mutate(Group = case_when(
+    Sex == "Women" & (Menopause == "postmenopausal") ~ "Women_Postmenopausal",
+    Sex == "Women" & (Menopause == "premenopausal") ~ "Women_Premenopausal",
+    Sex == "Men"  ~ "Men",
+    TRUE ~ "NA")) %>%
+    group_by(Group) %>% 
+  # filter(Group != "Women_pre_menop_no_mens" & Group != "NA") %>%   # droplevels() %>% 
+  mutate(Group = ordered(Group, levels =  c("Women_Premenopausal", "Women_Postmenopausal", "Men"))) 
+
+# PREVEND
+PREV_summary_final <- PREV_data_summary %>% 
+  mutate(Group = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & (Menopause == "postmenopausal") ~ "Women_Postmenopausal",
+    Sex == "Women" & (Menopause == "premenopausal") ~ "Women_Premenopausal",
+      TRUE ~ "NA")) %>% 
+  droplevels() %>% 
+  mutate(Group = ordered(Group, levels =  c("Women_Premenopausal", "Women_Postmenopausal", "Men"))) 
+
+#  HELIUS
+HELIUS_summary_final <- HELIUS_data_summary %>% 
+  mutate(Group = case_when(
+    Sex == "Women" & (Menopause == "postmenopausal") ~ "Women_Postmenopausal",
+    Sex == "Women" & (Menopause == "premenopausal") ~ "Women_Premenopausal",
+    Sex == "Men"  ~ "Men",
+    TRUE ~ "NA")) %>%
+    group_by(Group) %>% 
+  # filter(Group != "Women_pre_menop_no_mens" & Group != "NA") %>%   # droplevels() %>% 
+  mutate(Group = ordered(Group, levels =  c("Women_Premenopausal", "Women_Postmenopausal", "Men"))) 
+
+```
+
+# Align dataset for merge [add missing variables per cohort]
+```{r}
+# PREVEND
+PREV_summary_final$Donation_Freq_2YearsPrior <- 0
+PREV_summary_final$DaysToPreviousFB <- 0
+PREV_summary_final$Alcohol <- NA
+PREV_summary_final$Diet <- NA
+PREV_summary_final$TotalIron <- NA
+PREV_summary_final$HemeIron <- NA
+PREV_summary_final$NonHemeIron <- NA
+PREV_summary_final$CRP <- NA
+
+# DIS
+DIS_data_summary_final$CurrentOCCForContraception <- NA
+DIS_data_summary_final$CurrentOCCForclimacterium <- NA
+DIS_data_summary_final$UlcurTreatment <- NA
+DIS_data_summary_final$IronSupplementation <- NA
+DIS_data_summary_final$CRP <- NA
+
+# NEW
+NEW_data_summary_final$Donation_Freq_2YearsPrior <- 0
+NEW_data_summary_final$DaysToPreviousFB <- 0
+NEW_data_summary_final$Alcohol <- NA
+NEW_data_summary_final$Diet <- NA
+NEW_data_summary_final$TotalIron <- NA
+NEW_data_summary_final$HemeIron <- NA
+NEW_data_summary_final$NonHemeIron <- NA
+NEW_data_summary_final$CurrentOCC <- NA
+NEW_data_summary_final$CurrentOCCForContraception <- NA
+NEW_data_summary_final$CurrentOCCForclimacterium <- NA
+NEW_data_summary_final$UlcurTreatment <- NA
+NEW_data_summary_final$IronSupplementation <- NA
+NEW_data_summary_final$CRP <- NA
+NEW_data_summary_final$Smoking <- NA
+NEW_data_summary_final$Pregnancy <- NA
+
+# HELIUS
+HELIUS_summary_final$Donation_Freq_2YearsPrior <- 0
+HELIUS_summary_final$DaysToPreviousFB <- 0
+HELIUS_summary_final$Alcohol <- NA
+HELIUS_summary_final$Diet <- NA
+HELIUS_summary_final$TotalIron <- NA
+HELIUS_summary_final$HemeIron <- NA
+HELIUS_summary_final$NonHemeIron <- NA
+HELIUS_summary_final$CurrentOCCForContraception <- NA
+HELIUS_summary_final$CurrentOCCForclimacterium <- NA
+HELIUS_summary_final$UlcurTreatment <- NA
+HELIUS_summary_final$IronSupplementation <- NA
+
+```
+
+# Donation interval General Population Cohorts and DIS missings
+```{r}
+PREV_summary_final <- PREV_summary_final %>% mutate(DaysToPreviousFB = round(runif(nrow(PREV_summary_final), min = 3*365, max = 6*365) ,0))
+
+NEW_data_summary_final <- NEW_data_summary_final %>% ungroup() %>% mutate(DaysToPreviousFB = round(runif(nrow(NEW_data_summary_final), min = 3*365, max = 6*365) ,0))
+
+HELIUS_summary_final <- HELIUS_summary_final %>% ungroup() %>% mutate(DaysToPreviousFB = round(runif(nrow(HELIUS_summary_final), min = 3*365, max = 6*365) ,0))
+
+# Add for DIS donors without donation in last 2 years
+# DIS_data_summary_final <- DIS_data_summary_final %>% 
+#   ungroup() %>% 
+#   mutate(DaysToPreviousFB = ifelse(is.na(DaysToPreviousFB), 
+#     round(runif(n(), min = 3 * 365, max = 6 * 365), 0), 
+#     DaysToPreviousFB)
+#     )
+
+```
+
+## Remove cohort participants with missing data ##
+
+# Ferritin
+```{r}
+##DIS
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(Ferritin))
+
+##PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(Ferritin))
+
+##NEW
+NEW_data_summary_final <- NEW_data_summary_final %>% 
+  filter(!is.na(Ferritin))
+  
+##HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(Ferritin))
+```
+
+# Sex
+```{r}
+##DIS
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(Sex))
+
+##PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(Sex))
+
+##NEW
+NEW_data_summary_final <- NEW_data_summary_final %>% 
+  filter(!is.na(Sex))
+  
+##HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(Sex))
+```
+# Age
+```{r}
+#### DISIII
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(Age))
+
+#### NEW
+NEW_data_summary_final <- NEW_data_summary_final %>% 
+  filter(!is.na(Age))
+
+#### PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(Age))
+  
+#### HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(Age))
+```
+# Blood volume
+```{r}
+##DIS
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(blood_volume))
+
+##PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(blood_volume))
+
+##NEW
+NEW_data_summary_final <- NEW_data_summary_final %>% 
+  filter(!is.na(blood_volume))
+  
+##HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(blood_volume))
+```
+# Smoking
+```{r}
+#### DISIII
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(Smoking))
+
+#### PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(Smoking))
+
+### HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(Smoking))
+```
+
+
+# Menstruation
+```{r}
+#### DISIII
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(Menstruation) | Group == "Men")
+
+#### PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(Menstruation) | Group == "Men")
+
+### HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(Menstruation) | Group == "Men")
+```
+# Childbirth
+```{r}
+#### DISIII
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(Pregnancy) | Group == "Men")
+
+#### PREVEND (3 men filled out the pregnancy question: changed to NA)
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(Pregnancy) | Group == "Men")
+
+PREV_summary_final <- PREV_summary_final %>% 
+  mutate(Pregnancy = ifelse(Group == "Men", NA, Pregnancy)) %>%
+  mutate(Pregnancy = factor(Pregnancy))
+PREV_summary_final$Pregnancy <- gsub(2, "Yes", PREV_summary_final$Pregnancy)
+PREV_summary_final$Pregnancy <- gsub(1, "No", PREV_summary_final$Pregnancy)
+PREV_summary_final$Pregnancy <- as.factor(PREV_summary_final$Pregnancy)
+
+### HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(Pregnancy) | Group == "Men")
+```
+# Oral Contraception
+```{r}
+#### DISIII
+DIS_data_summary_final <- DIS_data_summary_final %>% 
+  filter(!is.na(CurrentOCC) | Group == "Men")
+
+#### PREVEND
+PREV_summary_final <- PREV_summary_final %>% 
+  filter(!is.na(CurrentOCC) | Group == "Men")
+
+### HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  filter(!is.na(CurrentOCC) | Group == "Men")
+```
+
+
+# Exclude extreme values [BMI and Weight]
+```{r}
+# DIS
+DIS_data_summary_final <- DIS_data_summary_final %>% filter(BMI < 50)
+DIS_data_summary_final <- DIS_data_summary_final %>% filter(Weight >= 50)
+
+# PREVEND
+PREV_summary_final <- PREV_summary_final %>% filter(BMI < 50)
+PREV_summary_final <- PREV_summary_final %>% filter(Weight >= 50)
+
+# NEW
+NEW_data_summary_final <- NEW_data_summary_final %>% filter(BMI < 50)
+NEW_data_summary_final <- NEW_data_summary_final %>% filter(Weight >= 50)
+
+# HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% filter(BMI < 50)
+HELIUS_summary_final <- HELIUS_summary_final %>% filter(Weight >= 50)
+```
+# Ferritin > 0
+```{r}
+DIS_data_summary_final <- DIS_data_summary_final %>%  filter(Ferritin > 0)
+DIS_data_summary_final <- DIS_data_summary_final %>% filter(Ferritin < 400)
+
+PREV_summary_final <- PREV_summary_final %>%  filter(Ferritin > 0)
+PREV_summary_final <- PREV_summary_final %>% filter(Ferritin < 400)
+
+NEW_data_summary_final <- NEW_data_summary_final %>% filter(Ferritin > 0)
+NEW_data_summary_final <- NEW_data_summary_final %>% filter(Ferritin < 400)
+
+HELIUS_summary_final <- HELIUS_summary_final %>% filter(Ferritin > 0)
+HELIUS_summary_final <- HELIUS_summary_final %>% filter(Ferritin < 400)
+```
+
+# Filter for Age [>17]
+```{r}
+DIS_data_summary_final <- DIS_data_summary_final %>% filter(Age > 17)
+
+PREV_summary_final <- PREV_summary_final %>%  filter(Age > 17)
+
+NEW_data_summary_final <- NEW_data_summary_final %>% filter(Age > 17)
+
+HELIUS_summary_final <- HELIUS_summary_final %>% filter(Age > 17)
+```
+
+# Filter Diabetes [Helius]
+```{r}
+HELIUS_summary_final <- HELIUS_summary_final %>% filter(Diabetes == "No")
+```
+# Filter on donation history DISIII
+```{r}
+DIS_data_summary_final <- DIS_data_summary_final %>% filter(!is.na(DaysToPreviousFB))
+#DIS_data_summary_final <- DIS_data_summary_final %>% filter(DaysToPreviousFB < 1095)
+# DIS_data_summary_final <- DIS_data_summary_final %>%
+#   filter((Sex == "Men" & DaysToPreviousFB > 60) | Sex == "Women")
+# DIS_data_summary_final <- DIS_data_summary_final %>%
+#   filter((Sex == "Women" & DaysToPreviousFB > 122) | Sex == "Men")
+# DIS_data_summary_final <- DIS_data_summary_final %>%
+#   filter((Sex == "Men" & Donation_Freq_2YearsPrior < 11) | Sex == "Women")
+# DIS_data_summary_final <- DIS_data_summary_final %>%
+#   filter((Sex == "Women" & Donation_Freq_2YearsPrior < 7) | Sex == "Men")
+
+
+```
+
+## Final group N for the three cohorts
+```{r}
+# DIS
+DIS_data_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+# NEW
+NEW_data_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+# PREVEND
+PREV_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+# HELIUS
+HELIUS_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+```
+
+## Select variables of interest for Cohort Dataset Merge
+```{r}
+# DIS
+DIS_summary_final <- DIS_data_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age,
+                Ferritin, Hb, BMI, Menstruation, Smoking, blood_volume, DaysToPreviousFB, Weight, Group, Cohort, Donation_Freq_2YearsPrior, DaysToPreviousFB, Alcohol, Diet, TotalIron, HemeIron, NonHemeIron, CurrentOCC, CurrentOCCForContraception, CRP, Pregnancy, CurrentOCCForclimacterium, UlcurTreatment) 
+
+# NEW
+NEW_summary_final <- NEW_data_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age,
+                Ferritin, Hb, BMI, Menstruation, Smoking, blood_volume, DaysToPreviousFB, Weight, Group, Cohort, Donation_Freq_2YearsPrior, DaysToPreviousFB, Alcohol, Diet, TotalIron, HemeIron, NonHemeIron, CurrentOCC, CurrentOCCForContraception, CRP, Pregnancy,  UlcurTreatment) 
+
+# PREV
+PREV_summary_final <- PREV_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age,
+                Ferritin, Hb, BMI, Menstruation, Smoking, blood_volume, DaysToPreviousFB, Weight, Group, Cohort, Donation_Freq_2YearsPrior, DaysToPreviousFB, Alcohol, Diet, TotalIron, HemeIron, NonHemeIron, CurrentOCC, CurrentOCCForContraception, CRP, Pregnancy, UlcurTreatment) 
+
+
+# HELIUS
+HELIUS_summary_final <- HELIUS_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age,
+                Ferritin, Hb, BMI, Menstruation, Smoking, blood_volume, DaysToPreviousFB, Weight, Group, Cohort, Donation_Freq_2YearsPrior, DaysToPreviousFB, Alcohol, Diet, TotalIron, HemeIron, NonHemeIron, CurrentOCC, CurrentOCCForContraception, CRP, Pregnancy, UlcurTreatment)
+```
+
+
+# merge the cohorts and change Smoking 'missing'to N.A.
+```{r}
+summary_all_cohorts <- bind_rows(DIS_summary_final, NEW_summary_final, PREV_summary_final, HELIUS_summary_final)
+```
+
+
+## Final group N for the summarized table
+```{r}
+summary_all_cohorts %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+```
+
+# Save Dataset
+```{r}
+saveRDS(summary_all_cohorts, file.path("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/", "1. Cohort Comparison - Merged Cohorts.rds"))
+```
+
+
+
+
+
+
+# Results - Regression table
+## Rename and transform
+```{r}
+regression_cohorts <- summary_all_cohorts %>% 
+    rename(donation_count = Donation_Freq_2YearsPrior,
+            last_donation = DaysToPreviousFB,
+            PreviousChildbirth = Pregnancy) %>% 
+     mutate(Age = Age / 5, 
+            donation_count_2 = donation_count^2,
+            log_ferritin = log(Ferritin),
+            log_last_donation = log(last_donation)/log(2),
+            iron_deficiency = Ferritin < 15) 
+
+regression_cohorts$Menstruation <- as.factor(regression_cohorts$Menstruation)
+regression_cohorts$Smoking <- as.factor(regression_cohorts$Smoking)
+regression_cohorts$Sex <- as.factor(regression_cohorts$Sex)
+regression_cohorts$Group <- as.factor(regression_cohorts$Group)
+regression_cohorts$Cohort <- as.factor(regression_cohorts$Cohort)
+regression_cohorts$PreviousChildbirth <- as.character(regression_cohorts$PreviousChildbirth)
+regression_cohorts$PreviousChildbirth[!(regression_cohorts$PreviousChildbirth %in% c("Yes", "No"))] <- NA  
+
+# Remove ferritin of 0
+regression_cohorts <- regression_cohorts %>% 
+  group_by(Cohort) %>%
+  filter(Ferritin > 0)
+
+# Change contraception variable name
+names(regression_cohorts)[names(regression_cohorts) == "CurrentOCC"] <- "Oral_contraception"
+
+# Remove NES dataset
+regression_cohorts <- regression_cohorts[!(regression_cohorts$Cohort == "NES"), ]
+
+# Remove HELIUS dataset
+regression_cohorts <- regression_cohorts[!(regression_cohorts$Cohort == "HELIUS"), ]
+
+# Rename PREVEND 
+regression_cohorts$Cohort <- gsub("PREVEND", "General Population", regression_cohorts$Cohort)
+
+# Rename NEW
+regression_cohorts$Cohort <- gsub("NEW", "New Donors", regression_cohorts$Cohort)
+```
+
+# Save Regression Data Dataset
+
+```{r}
+saveRDS(regression_cohorts, file.path("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/", "2. Cohort Comparison - Regression Data.rds"))
+```
+
+
+
+```{r}
+
+```

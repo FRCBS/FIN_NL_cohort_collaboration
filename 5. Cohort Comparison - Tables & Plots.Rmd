@@ -1,0 +1,861 @@
+---
+title: "5. Cohort Comparison - Tables & Plots"
+author: "Jan Karregat"
+date: "5-11-2023"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+Sys.setlocale("LC_MESSAGES", 'en_GB.UTF-8')
+Sys.setenv(LANG = "en_US.UTF-8")
+
+knitr::opts_chunk$set(
+        echo = FALSE,
+        message = FALSE,
+        warning = FALSE
+)
+
+currentDate <- format(Sys.time(), "%Y-%m-%d")
+FolderName <- paste("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/3. R Plots/", currentDate,sep="")
+dir.create(FolderName)
+
+
+library(webshot)
+library(patchwork)
+library(lubridate)
+library(plyr)
+library(readr)
+library(nFactors)
+library(psych)
+library(corrplot)
+library(psych)
+library(ggplot2)
+library(ggthemes)
+library(haven)
+library(rsample)
+library(broom)
+library(scales)
+library(kableExtra)
+library(naniar)
+library(haven)
+library(foreign)
+library(tableone)
+library(stargazer)
+library(gridExtra)
+library(cowplot)
+library(broom)
+library(GGally)
+library(ggfortify)
+library(knitr)
+library(lubridate)
+library(car)
+library(reshape2)
+library(sfsmisc)
+library(MASS)
+library(ordinal)
+library(sjmisc)
+library(VIM)
+library(epiDisplay)
+library(epitools)
+library(ez)
+library(ggbeeswarm)
+library(ggthemes)
+library(rsample)
+library(broom)
+library(scales)
+library(kableExtra)
+library(boot)
+library(readxl)
+library(foreign)
+library(corrr)
+library(ggcorrplot)
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidylog, warn.conflicts = F)
+```
+
+
+
+# Table 1. - Open datasets
+
+```{r}
+# Dutch summary data
+Table1_Dutch <- read.csv("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/3B. Cohort Comparison - Dutch Summary Data - Table 1.txt", header = TRUE, sep = "\t")
+
+# Finnish summary data
+Table1_Fin <- read.csv("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/3B. Cohort Comparison - Finnish Summary Data - Table 1.txt", header = TRUE, sep = "\t")
+
+```
+
+
+# Table 1. - Adjust names Dutch cohorts 
+
+```{r}
+# Raname variables
+rename_list_Dutch <- list(
+  "n" = "n",
+  "age (mean (SD))" = "Age (mean (SD))",
+  "blood_volume (mean (SD))" = "Blood volume (L) (mean (SD))",
+  "ferritin (median [IQR])" = "Ferritin (ug/L) (median [IQR])",
+  "Iron_Deficiency = TRUE (%)" = "Iron deficiency (%)",
+  "Donation_Freq_2YearsPrior (mean (SD))" = "Number of donations in the last two years (median [IQR])",
+  "DaysToPreviousFB (mean (SD))" = "Number of days since last donation (median [IQR])",
+  "Smoking = Yes (%)" = "Smoking (%)",
+  "Childbirth = Yes (%)" = "Childbirth in the past (median [IQR])",
+  "Oral contraception = Yes (%)" = "Current oral contraception use (%)",
+  "Menstruation = Yes (%)" = "Menstruation (%)"
+)
+rownames(Table1_Dutch) <- rename_list_Dutch[rownames(Table1_Dutch)]
+
+# Change variable order
+row_names_Dutch <- unlist(rename_list_Dutch)
+Table1_Dutch <- Table1_Dutch[row_names_Dutch, ]
+
+```
+
+
+# Table 1. - Adjust names Finnish cohorts
+
+```{r}
+# Raname variables
+rename_list_Fin <- list(
+  "n" = "n",
+  "Age (mean (SD))" = "Age (mean (SD))",
+  "Blood volume (l) (mean (SD))" = "Blood volume (L) (mean (SD))",
+  "Ferritin (ug/l) (median [IQR])" = "Ferritin (ug/L) (median [IQR])",
+  "Iron deficiency = TRUE (%)" = "Iron deficiency (%)",
+  "Donation frequency during past two years (median [IQR])" = "Number of donations in the last two years (median [IQR])",
+  "Number of days since last whole blood donation (median [IQR])" = "Number of days since last donation (median [IQR])",
+  "Smoking = yes (%)" = "Smoking (%)",
+  "Childbirth in the past (median [IQR])" = "Childbirth in the past (median [IQR])",
+  "Hormonal contraception = yes (%)" = "Current oral contraception use (%)",
+  "Menstruation = Yes (%)" = "Menstruation (%)"
+)
+rownames(Table1_Fin) <- rename_list_Fin[rownames(Table1_Fin)]
+
+# Change variable order
+row_names_Fin <- unlist(rename_list_Fin)
+Table1_Fin <- Table1_Fin[row_names_Fin, ]
+```
+
+
+# Table 1. - Combine Dutch & Finnish cohorts 
+
+```{r}
+# Bind Dutch and Finnish datasets
+Table1_Combined <- cbind(Table1_Dutch, Table1_Fin)
+
+
+# Create Group row
+new_row_data <- setNames(data.frame(matrix(NA, ncol = ncol(Table1_Combined))), names(Table1_Combined))
+Table1_Combined <- rbind(Table1_Combined, new_row_data)
+rownames(Table1_Combined)[rownames(Table1_Combined) == "1"] <- "Group"
+
+desired_order_parameter <- c("Group",
+"n",
+"Age (mean (SD))",
+"Blood volume (L) (mean (SD))",
+"Ferritin (ug/L) (median [IQR])",
+"Iron deficiency (%)",
+"Number of donations in the last two years (median [IQR])",
+"Number of days since last donation (median [IQR])",
+"Smoking (%)",
+"Childbirth in the past (median [IQR])",
+"Current oral contraception use (%)",
+"Menstruation (%)")
+Table1_Combined <- Table1_Combined[desired_order_parameter, ] 
+
+
+```
+
+
+# Table 1. - Formatting
+
+```{r}
+# Create Group row
+identify_group <- function(colname) {
+  if (grepl("(?i)\\bMen\\b", colname, ignore.case = TRUE)) {
+    return("Men")
+  } else if (grepl("Pre", colname, ignore.case = TRUE)) {
+    return("Women \u226450 years")
+  } else if (grepl("Post", colname, ignore.case = TRUE)) {
+    return("Women >50 years")
+  }
+  return(NULL)
+}
+
+# Identify Group
+for (col in colnames(Table1_Combined)) {
+  group <- identify_group(col)
+  if (!is.null(group)) {
+    Table1_Combined["Group", col] <- group
+  }
+}
+
+# Remove points in column names
+colnames(Table1_Combined) <- gsub("\\.\\.", ".", colnames(Table1_Combined))
+
+# Show values Group
+unique(Table1_Combined["Group", ])
+
+
+# Remove everything but the cohort name for columnnames
+cohort_names <- sub("\\..*", "", colnames(Table1_Combined))
+
+# Replace with column names
+colnames(Table1_Combined) <- cohort_names
+unique(colnames(Table1_Combined))
+
+# Alter column order (Men, Premenopausal women, and Post menopausal women)
+Table1_Combined <- Table1_Combined[,c(1:3,10,11,4:9,12:15)]
+Table1_Combined <- Table1_Combined[,c(9:11,14,15,1:8,12,13)]
+
+# Remove the 1 and 2 in the colnames
+colnames(Table1_Combined) <- sub("\\.1$", "", colnames(Table1_Combined))
+colnames(Table1_Combined) <- sub("\\.2$", "", colnames(Table1_Combined))
+colnames(Table1_Combined)
+
+```
+
+
+# Table 1. - Produce and save
+
+```{r}
+Table1 <- kable(Table1_Combined) %>% kable_styling(latex_options = "striped")
+
+kableTable <- kable(Table1_Combined) %>%
+  kable_styling(latex_options = "striped", full_width = TRUE)
+
+num_columns <- ncol(Table1_Combined)
+
+# Pas de kolombreedte aan om wrappen te voorkomen voor elke kolom
+for (i in 1:num_columns) {
+  kableTable <- kableTable %>%
+    column_spec(column = i, width = "10em", extra_css = "white-space: nowrap;")
+}
+
+webshot::install_phantomjs(force = TRUE)
+kableExtra::save_kable(kableTable, "C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/5. Tables & figures/1. Table 1.png")
+```
+
+
+# Histogram - Ferritin 
+
+
+
+
+# Prevalence plots - Open dataset sets
+
+```{r}
+# Dutch summary data
+Prevalence_Dutch <-  readRDS("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/4A. Cohort Comparison - Dutch Summary Data - Prevalence plot.rds")
+
+# Finnish summary data
+Prevalence_Fin <- load(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/4B. Cohort Comparison - Finnish Summary Data - Prevalence Plot.rdata", verbose = TRUE)
+Prevalence_Fin <- figure_data_FIN
+
+# Combine datasets
+Prevalence_Combined <- rbind(Prevalence_Dutch, Prevalence_Fin)
+
+# change variable types to numeric
+Prevalence_Combined$.lower <- as.numeric(Prevalence_Combined$.lower)
+Prevalence_Combined$.estimate <- as.numeric(Prevalence_Combined$.estimate)
+Prevalence_Combined$.upper <- as.numeric(Prevalence_Combined$.upper)
+Prevalence_Combined$.alpha <- as.numeric(Prevalence_Combined$.alpha)
+Prevalence_Combined$Country <- gsub("DUTCH", "Dutch", Prevalence_Combined$Country)
+Prevalence_Combined$Country <- gsub("FIN", "Finnish", Prevalence_Combined$Country)
+Prevalence_Combined$cohort  <- factor(Prevalence_Combined$cohort, levels = c("Blood donors", "General population", "New blood donors"))
+
+
+
+```
+
+
+# Prevalence plot - Create plot
+
+```{r}
+# Create ggplot
+figure  <- ggplot(Prevalence_Combined, aes(x = term, y = .estimate, ymin = .lower, ymax = .upper, fill = cohort)) +
+  scale_fill_manual(values=c("red", "blue", "green")) +
+ geom_crossbar(alpha = 0.25, color = "dark gray", position = position_dodge(width = 0.6)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     breaks = seq(0,.8, by = 0.05)) +
+  facet_grid(Country~sex) +
+    theme_few() +
+  xlab("Age") +
+  ylab("Prevalence of iron deficiency") +
+  theme(
+    axis.text.y.left = element_text(size = 16),
+    axis.text.x = element_text(size = 16),
+    axis.title.x = element_text(size = 16),
+    axis.title.y.left = element_text(vjust = 1.5, size = 16),
+    strip.text = element_text(size = 16),  
+    strip.text.x = element_text(size = 16),
+    legend.position = "bottom",
+    legend.text = element_text(size = 16)  
+  ) +
+  guides(fill = guide_legend(ncol = 3))+
+  labs(fill = "")
+
+figure
+
+# Save prevalence plot
+FileName <- paste(FolderName, "/Prevalence plot.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+```
+
+
+# Linear regression - Datasets
+
+```{r}
+# Dutch summary data
+Linear_Dutch <-  readRDS("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/5A. Cohort Comparison - Dutch Summary Data - Linear Regression.rds")
+Linear_Dutch$Country <- "Dutch"
+Linear_Dutch$Group <- gsub("Women premenopausal", "Women \u226450 years", Linear_Dutch$Group)
+Linear_Dutch$Group <- gsub("Women postmenopausal", "Women >50 years", Linear_Dutch$Group)
+Linear_Dutch$parameter <- gsub("New Donors", "New blood donor", Linear_Dutch$parameter)
+Linear_Dutch$parameter <- gsub("General Population", "General population", Linear_Dutch$parameter)
+Linear_Dutch$parameter <- gsub("log_last_donation", "Days since last blood donation (log transformed)", Linear_Dutch$parameter)
+Linear_Dutch$parameter <- gsub("donation_count_2", "Number of blood donations (quadratic)", Linear_Dutch$parameter)
+Linear_Dutch$parameter <- gsub("donation_count", "Number of blood donations", Linear_Dutch$parameter)
+Linear_Dutch$parameter <- gsub("Childbirth", "Childbirth in the past", Linear_Dutch$parameter)
+Linear_Dutch$parameter <- gsub("Oral contraception", "Hormonal contraception", Linear_Dutch$parameter)
+Linear_Dutch$Model <- gsub("Model 1", "M1", Linear_Dutch$Model)
+Linear_Dutch$Model <- gsub("Model 2", "M2", Linear_Dutch$Model)
+Linear_Dutch$Model <- gsub("Model 3", "M3", Linear_Dutch$Model)
+Linear_Dutch$Model <- gsub("Model 4", "M4", Linear_Dutch$Model)
+Linear_Dutch$is.sig <- !(Linear_Dutch$ll <= 0 & 0 <= Linear_Dutch$hh)
+
+
+# Finnish summary data
+load(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/5B. Cohort Comparison - Finnish Summary Data - Linear Regression.rdata", verbose = TRUE)
+Linear_Fin <- FinalForest_FIN
+Linear_Fin$Country <- "Finnish"
+Linear_Fin$Group <- gsub("Premenopausal Women", "Women \u226450 years", Linear_Fin$Group)
+Linear_Fin$Group <- gsub("Postmenopausal Women", "Women >50 years", Linear_Fin$Group)
+Linear_Fin$parameter <- gsub("General Population", "General population", Linear_Fin$parameter)
+rows_to_change <- Linear_Fin$parameter == "Blood volume (Nadler)"
+Linear_Fin$parameter[rows_to_change] <- "Blood volume"
+Linear_Fin$Model <- gsub("Model 1", "M1", Linear_Fin$Model)
+Linear_Fin$Model <- gsub("Model 2", "M2", Linear_Fin$Model)
+Linear_Fin$Model <- gsub("Model 3", "M3", Linear_Fin$Model)
+Linear_Fin$Model <- gsub("Model 4", "M4", Linear_Fin$Model)
+Linear_Fin$is.sig <- !(Linear_Fin$ll <= 0 & 0 <= Linear_Fin$hh)
+
+
+
+# Combine dataset
+Linear_Combined <- rbind(Linear_Dutch, Linear_Fin)
+
+# Save combined table
+write.table(Linear_Combined, "C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/5. Tables & figures/Linear table I.txt", sep = "\t", quote = FALSE, col.names = TRUE, row.names = TRUE)
+ 
+```
+
+
+# Linear regression - Plots
+
+
+```{r}
+orlower_men <- -1
+orupper_men <- 1
+
+# Color definition 
+color_mapping <- c(  "General population" = "#0000FF",  "New blood donor" = "#008000",  "Age" = "#FFA500",    "Blood volume" = "#FFA500",    "Number of blood donations" = "#FF0000",    "Number of blood donations (quadratic)" = "#FF0000",  
+  "Days since last blood donation (log transformed)" = "#FF0000",    "Smoking" = "#800080",    "Childbirth in the past" = "#800080",   "Menstruation" = "#800080",  "Hormonal contraception" = "#800080")
+
+# Dutch linear plot
+desired_order_parameter <- c( "General population", "New blood donor", "Age", "Blood volume", "Number of blood donations", "Number of blood donations (quadratic)", "Days since last blood donation (log transformed)","Smoking", "Childbirth in the past", "Menstruation", "Hormonal contraception")
+Linear_Dutch$parameter <- factor(Linear_Dutch$parameter, levels = rev(desired_order_parameter))
+
+p_Dutch <- ggplot(Linear_Dutch, aes(x = m, y = parameter, color = parameter)) +
+  geom_vline(xintercept = 0, color = "grey", linetype = "solid",
+             size = 1)  +
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  xlim(orlower_men, orupper_men) +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none"
+  ) +
+  guides(shape = "none") +
+  labs(title = "Dutch") +
+  xlab(" ") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+
+
+
+# Finnish linear plot
+desired_order_parameter_Fin <- c( "General population", "Age", "Blood volume",  "Number of blood donations", "Number of blood donations (quadratic)", "Days since last blood donation (log transformed)", "Smoking", "Childbirth in the past", "Menstruation", "Hormonal contraception")
+Linear_Fin$parameter <- factor(Linear_Fin$parameter, levels = rev(desired_order_parameter_Fin))
+
+p_Fin <- ggplot(Linear_Fin, aes(x = m, y = parameter, color = parameter))  +
+  geom_vline(xintercept = 0, color = "grey", linetype = "solid",
+             size = 1) +
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  xlim(orlower_men, orupper_men)  +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none"
+  ) +
+  guides(shape = "none") +
+  labs(title = "Finnish") +
+  xlab("Coefficient") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+
+
+
+# Combined linear plot
+dutch_plot <- p_Dutch + theme(strip.text.x = element_text(size = 14))
+finnish_plot <- p_Fin +  theme(strip.text.x = element_blank())
+
+final_plot <-  dutch_plot/finnish_plot
+
+final_plot
+
+FileName <- paste(FolderName, "/Forest Plot - Linear Final - Combined.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+```
+
+# Logistic regression - Datasets
+
+```{r}
+# Dutch summary data
+Logistic_Dutch <-  readRDS("C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/6A. Cohort Comparison - Dutch Summary Data - Logistic Regression.rds")
+Logistic_Dutch$Country <- "Dutch"
+Logistic_Dutch$Group <- gsub("Women Premenopausal", "Women \u226450 years", Logistic_Dutch$Group)
+Logistic_Dutch$Group <- gsub("Women Postmenopausal", "Women >50 years", Logistic_Dutch$Group)
+Logistic_Dutch$parameter <- gsub("New Donors", "New blood donor", Logistic_Dutch$parameter)
+Logistic_Dutch$parameter <- gsub("General Population", "General population", Logistic_Dutch$parameter)
+Logistic_Dutch$parameter <- gsub("log_last_donation", "Days since last blood donation (log transformed)", Logistic_Dutch$parameter)
+Logistic_Dutch$parameter <- gsub("donation_count_2", "Number of blood donations (quadratic)", Logistic_Dutch$parameter)
+Logistic_Dutch$parameter <- gsub("donation_count", "Number of blood donations", Logistic_Dutch$parameter)
+Logistic_Dutch$parameter <- gsub("Childbirth", "Childbirth in the past", Logistic_Dutch$parameter)
+Logistic_Dutch$parameter <- gsub("Oral contraception", "Hormonal contraception", Logistic_Dutch$parameter)
+Logistic_Dutch$Model <- gsub("Model 1", "M1", Logistic_Dutch$Model)
+Logistic_Dutch$Model <- gsub("Model 2", "M2", Logistic_Dutch$Model)
+Logistic_Dutch$Model <- gsub("Model 3", "M3", Logistic_Dutch$Model)
+Logistic_Dutch$Model <- gsub("Model 4", "M4", Logistic_Dutch$Model)
+Logistic_Dutch$is.sig <- !(Logistic_Dutch$ll <= 1 & 1 <= Logistic_Dutch$hh)
+
+# Finnish summary data
+load(file="C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/2. R Datasets/6B. Cohort Comparison - Finnish Summary Data - Logistic Regression.rdata", verbose = TRUE)
+Logistic_Fin <- FinalForest_FIN_log
+Logistic_Fin$Country <- "Finnish"
+Logistic_Fin$Group <- gsub("Premenopausal Women", "Women \u226450 years", Logistic_Fin$Group)
+Logistic_Fin$Group <- gsub("Postmenopausal Women", "Women >50 years", Logistic_Fin$Group)
+Logistic_Fin$parameter <- gsub("General Population", "General population", Logistic_Fin$parameter)
+rows_to_change <- Logistic_Fin$parameter == "Blood volume (Nadler)"
+Logistic_Fin$parameter[rows_to_change] <- "Blood volume"
+Logistic_Fin$Model <- gsub("Model 1", "M1", Logistic_Fin$Model)
+Logistic_Fin$Model <- gsub("Model 2", "M2", Logistic_Fin$Model)
+Logistic_Fin$Model <- gsub("Model 3", "M3", Logistic_Fin$Model)
+Logistic_Fin$Model <- gsub("Model 4", "M4", Logistic_Fin$Model)
+Logistic_Fin$is.sig <- !(Logistic_Fin$ll <= 1 & 1 <= Logistic_Fin$hh)
+
+# Combine dataset
+Logistic_Combined <- rbind(Logistic_Dutch, Logistic_Fin)
+
+# Save combined table
+ write.table(Logistic_Combined, "C:/Users/karre01j/OneDrive - Sanquin/A FORTE/A3 Collaboration Finland/1. Cohort Comparison Analysis/2. Analysis [R]/5. Tables & figures/Logistic table.txt", sep = "\t", quote = TRUE, col.names = TRUE, row.names = TRUE)
+```
+
+
+# Logistic regression - Plots
+
+```{r}
+# Color definition 
+color_mapping <- c(  "General population" = "#0000FF",  "New blood donor" = "#008000",  "Age" = "#FFA500",    "Blood volume" = "#FFA500",    "Number of blood donations" = "#FF0000",    "Number of blood donations (quadratic)" = "#FF0000",  
+  "Days since last blood donation (log transformed)" = "#FF0000",    "Smoking" = "#800080",    "Childbirth in the past" = "#800080",   "Menstruation" = "#800080",  "Hormonal contraception" = "#800080")
+
+# Adjust CI limit to fit plot
+  Hist_Log_Dutch <- Logistic_Dutch %>% mutate(
+    hh = (ifelse(hh>100,100,hh))
+  )
+
+# Dutch logistic plot
+desired_order_parameter <- c( "General population", "New blood donor", "Age", "Blood volume", "Number of blood donations", "Number of blood donations (quadratic)", "Days since last blood donation (log transformed)","Smoking", "Childbirth in the past", "Menstruation", "Hormonal contraception")
+Hist_Log_Dutch$parameter <- factor(Hist_Log_Dutch$parameter, levels = rev(desired_order_parameter))
+
+p_Dutch <- ggplot(Hist_Log_Dutch, aes(x = m, y = parameter, color = parameter)) +
+  geom_vline(xintercept = 1, color = "grey", linetype = "solid",
+             size = 1)  +
+  scale_x_log10(
+    limits = c(0.01, 100),
+    labels = function(x) {
+      ifelse(x %in% c(1, 10, 100), as.character(x), label_number()(x))
+    }
+    )+
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none"
+  ) +
+  guides(shape = "none") +
+  labs(title = "Dutch") +
+  xlab(" ") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+
+p_Dutch
+
+FileName <- paste(FolderName, "/FinalForest_Log_Dutch.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+# Finnish logistic plot
+# Adjust CI limit to fit plot
+  Hist_Log_Fin <- Logistic_Fin %>% mutate(
+    hh = (ifelse(hh>100,100,hh))
+  )
+  
+# Adjust color scheme
+desired_order_parameter_Fin <- c("General population", "Age", "Blood volume",  "Number of blood donations", "Number of blood donations (quadratic)", "Days since last blood donation (log transformed)", "Smoking", "Childbirth in the past", "Menstruation", "Hormonal contraception")
+Hist_Log_Fin$parameter <- factor(Hist_Log_Fin$parameter, levels = rev(desired_order_parameter_Fin))
+
+
+p_Fin <- ggplot(Hist_Log_Fin, aes(x = m, y = parameter, color = parameter)) +
+  geom_vline(xintercept = 1, color = "grey", linetype = "solid",
+             size = 1) +
+  scale_x_log10(
+    limits = c(0.01, 100),
+    labels = function(x) {
+      ifelse(x %in% c(1, 10, 100), as.character(x), label_number()(x))
+    }
+    )+
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none"
+  ) +
+  guides(shape = "none") +
+  labs(title = "Finnish") +
+  xlab("OR") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+
+p_Fin
+
+FileName <- paste(FolderName, "/FinalForest_Log_Fin.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+
+# Create separate plot objects
+dutch_plot <- p_Dutch + theme(strip.text.x = element_text(size = 14))
+finnish_plot <- p_Fin +  theme(strip.text.x = element_blank())
+
+
+# Combine plots
+final_plot <-  dutch_plot / finnish_plot
+final_plot
+
+FileName <- paste(FolderName, "/FinalForest_Log_Combined.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+# Linear regression - Plots - Cohort effects only
+
+
+```{r}
+Linear_Dutch_Cohort <- Linear_Dutch[c(1,2,5,6,12,13,20:22,25,26,32,33,40,44,45,48,49,55,56,63),]
+
+orlower_men <- -1
+orupper_men <- 1
+
+# Color definition 
+color_mapping <- c(  "General population" = "#0000FF",  "New blood donor" = "#008000")
+
+# Dutch linear plot
+desired_order_parameter <- c( "General population", "New blood donor")
+Linear_Dutch_Cohort$parameter <- factor(Linear_Dutch_Cohort$parameter, levels = rev(desired_order_parameter))
+
+p_Dutch_Cohort <- ggplot(Linear_Dutch_Cohort, aes(x = m, y = parameter, color = parameter)) +
+  geom_vline(xintercept = 0, color = "grey", linetype = "solid",
+             size = 1)  +
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  #scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  xlim(orlower_men, orupper_men) +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  ) +
+  guides(color = guide_legend(title = NULL), shape = "none")  +
+  labs(title = "Dutch") +
+  xlab(" ") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+p_Dutch_Cohort
+
+
+# Finnish linear plot
+Linear_Fin_Cohort <- Linear_Fin[c(1,4,10,17:19,22,34,38,41,47,54),]
+
+desired_order_parameter_Fin <- c( "General population")
+Linear_Fin_Cohort$parameter <- factor(Linear_Fin_Cohort$parameter, levels = rev(desired_order_parameter_Fin))
+
+p_Fin_Cohort <- ggplot(Linear_Fin_Cohort, aes(x = m, y = parameter, color = parameter))  +
+  geom_vline(xintercept = 0, color = "grey", linetype = "solid",
+             size = 1) +
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  xlim(orlower_men, orupper_men)  +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none"
+  ) +
+  guides(shape = "none") +
+  labs(title = "Finnish") +
+  xlab("Coefficient") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+p_Fin_Cohort
+
+
+# Combined linear plot
+dutch_plot_Cohort <- p_Dutch_Cohort + theme(strip.text.x = element_text(size = 14))
+finnish_plot_Cohort <- p_Fin_Cohort +  theme(strip.text.x = element_blank())
+
+final_plot_Cohort <-  dutch_plot_Cohort/finnish_plot_Cohort
+
+final_plot_Cohort
+
+FileName <- paste(FolderName, "/Forest Plot - Linear Final - Cohorts only.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+
+```
+
+
+# Logistic regression - Plots - Cohort only
+
+```{r}
+# Color definition 
+color_mapping <- c(  "General population" = "#0000FF",  "New blood donor" = "#008000")
+
+# Select only cohort effect sizes an adjust CI limit to fit plot
+Hist_Log_Dutch_Cohort <- Hist_Log_Dutch[c(1,2,5,6,12,13,20:22,25,26,27,33,40,44,45,48,49,55,56,63),]
+  Hist_Log_Dutch_Cohort <- Hist_Log_Dutch_Cohort %>% mutate(
+    hh = (ifelse(hh>100,100,hh))
+  )
+
+# Dutch logistic plot
+desired_order_parameter <- c( "General population", "New blood donor")
+Hist_Log_Dutch_Cohort$parameter <- factor(Hist_Log_Dutch_Cohort$parameter, levels = rev(desired_order_parameter))
+
+p_Dutch_Cohort_Log <- ggplot(Hist_Log_Dutch_Cohort, aes(x = m, y = parameter, color = parameter)) +
+  geom_vline(xintercept = 1, color = "grey", linetype = "solid",
+             size = 1)  +
+  scale_x_log10(
+    limits = c(0.001, 100),
+    labels = function(x) {
+      ifelse(x %in% c(1, 10, 100), as.character(x), label_number()(x))
+    }
+    )+
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  ) +
+  guides(color = guide_legend(title = NULL), shape = "none") +
+  labs(title = "Dutch") +
+  xlab(" ") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+
+p_Dutch_Cohort_Log
+
+FileName <- paste(FolderName, "/FinalForest_Log_Dutch_Cohorts.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+# Finnish logistic plot
+Hist_Log_Fin_Cohort <- Hist_Log_Fin[c(1,4,10,17:18,21,27,34,38,41,47,54),]
+# Adjust CI limit to fit plot
+  Hist_Log_Fin_Cohort <- Hist_Log_Fin_Cohort %>% mutate(
+    hh = (ifelse(hh>100,100,hh))
+  )
+  
+esired_order_parameter_Fin <- c( "Men", "Women Premenopausal", "Women Postmenopausal")
+Hist_Log_Fin_Cohort$Group <- factor(Hist_Log_Fin_Cohort$Group, levels = esired_order_parameter_Fin)
+  
+# Adjust color scheme
+#desired_order_parameter_Fin <- c("General population", "Age", "Blood volume",  "Number of blood donations", "Number of blood donations (quadratic)", "Days since last blood donation (log transformed)", "Smoking", "Childbirth in the past", "Menstruation", "Hormonal contraception")
+#Hist_Log_Fin_Cohort$parameter <- factor(Hist_Log_Fin_Cohort$parameter, levels = rev(desired_order_parameter_Fin))
+
+
+p_Fin_Cohort_Log <- ggplot(Hist_Log_Fin_Cohort, aes(x = m, y = parameter, color = parameter)) +
+  geom_vline(xintercept = 1, color = "grey", linetype = "solid",
+             size = 1) +
+  scale_x_log10(
+    limits = c(0.001, 100),
+    labels = function(x) {
+      ifelse(x %in% c(1, 10, 100), as.character(x), label_number()(x))
+    }
+    )+
+  geom_point(aes(shape = is.sig), size = 4) +
+  geom_linerange(aes(xmin = ll, xmax = hh),
+                 size = 1,
+                 linetype = 1
+  ) +
+  scale_shape_manual(values = c(1, 16)) +
+  scale_color_manual(values = c(color_mapping)) +
+  theme_gray() +
+  theme(
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    strip.background = element_rect(fill = "white"),
+    strip.background.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    panel.grid.major.y = element_line(color = "gray", linetype = "dotted"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none"
+  ) +
+  guides(shape = "none") +
+  labs(title = "Finnish") +
+  xlab("OR") +
+  ylab(" ") +
+  facet_grid(Model ~ Group, scale = "free_y", space = "free_y")
+
+p_Fin_Cohort_Log
+
+FileName <- paste(FolderName, "/FinalForest_Log_Finh_Cohorts.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+
+
+
+# Create separate plot objects
+dutch_plot_Cohort_Log <- p_Dutch_Cohort_Log + theme(strip.text.x = element_text(size = 14))
+finnish_plot_Cohort_Log <- p_Fin_Cohort_Log +  theme(strip.text.x = element_blank())
+
+
+# Combine plots
+final_plot_Cohorts <-  dutch_plot_Cohort_Log / finnish_plot_Cohort_Log
+final_plot_Cohorts
+
+FileName <- paste(FolderName, "/FinalForest_Log_Combined_Cohorts.png",sep="")
+ggsave(FileName, width = 15, height = 10)
+```
