@@ -1,6 +1,6 @@
 ---
 title: "Ferritin model"
-author: "Mikko Arvas"
+author: "Jan Karregat"
 date: "18.11.2021"
 output: pdf_document
 
