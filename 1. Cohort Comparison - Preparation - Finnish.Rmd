@@ -1,0 +1,1820 @@
+---
+title: "Cohort Comparison - Cohort Preparation"
+author: "Sofie Ekroos"
+date: "1.10.2023"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+Based on Muriel Lobier's original code (https://github.com/FRCBS/iron_levels_of_blood_donors/blob/master/src/index.Rmd)
+
+# Summary
+
+This document includes all codes necessary to run the analysis of and produce the figures for the two Finnish Cohorts (FinDonor and THL general population cohort). In this code the general population cohort has been created by combining the two general population cohorts: FINRISK97 and Health2000. The code allows the user to describe the cohorts and build a summary table that can be used in further regression analysis.
+
+```{r setup, , message = FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse) 
+library(tableone) 
+library(stargazer)
+library(gridExtra)
+library(cowplot)
+library(broom)
+library(GGally)
+library(ggfortify)
+library(knitr) 
+library(lubridate)
+library(car)
+library(sfsmisc)
+library(MASS)
+library(ordinal)
+library(sjmisc)
+library(epiDisplay)
+#library(safeBinaryRegression)
+library(epitools)
+library(ez)
+library(ggbeeswarm)
+library(tidymodels)
+#library(kableExtra) 
+library(rmarkdown) 
+library(readxl)
+#library(tidylog)
+
+  # echo "rmarkdown::render('low_ferritin_data_genpop_combined.Rmd', clean=TRUE,output_format='pdf_document',output_file='../results/genpop_combined/low_ferritin_data_FIN_genpop_combined.pdf')" | R --slave
+
+```
+
+# Data loading and preparation
+
+## Data loading
+
+We have one cohort of blood donors, FinDonor, and two general population cohorts, FinRisk97 and Health2000. 
+
+```{r , warning=FALSE}
+# load FinDonor biomarker data
+load("../data/r02.fd.bd.all.PRID.rdata")
+indiv_donations_data <- output
+rm(output)
+
+# load FinDonor demographic data
+load("../data/r02ds.donorData.PRID.rdata")
+donor_demo <- output
+rm(output)
+
+# load FinDonor hormonal contraception data
+contraception_data_FD <- read_excel("../data/HCdata_PRID.xlsx")
+
+# load THL data
+load("../data/thldata.rdata")
+
+# thldalta.rdata contains all five THL cohorts, extract FINRISK97 and Health2000 from the others (these include ferritin measurements)
+fr1997 <- thldata$fr1997
+h2000 <- thldata$h2000
+rm(thldata)
+```
+
+## Data preparation
+
+First we assign study participants to their cohorts.
+
+```{r}
+# add an extra cohort variable to carry the original cohort ownership in case of needing it later
+indiv_donations_data$origcohort <- c("FINDONOR")
+fr1997$origcohort <- c("FD97")
+h2000$origcohort <- c("H2000")
+
+
+indiv_donations_data$Cohort <- c("FINDONOR")
+fr1997$Cohort <- c("THL")
+h2000$Cohort <- c("THL")
+```
+
+As we are only interested in current use of hormonal contraception, change variable for donors before joining table
+
+Questions no. 29 and 31 in FinDonor 10000 Health and Lifestyle Survey:
+
+29. Do you use, or have you ever used, birth control pills, the contraceptive patch, vaginal ring or the contraceptive implant?
+31. Do you use, or have you ever used, a hormonal intrauterine device?
+
+1 = No, never
+2 = Yes, at the moment; for n years
+3 = No, but have done in the past; for n years
+
+```{r}
+#we build two variables for current use of LNG IUD and for current use of other types of hormonal contraceptives
+contraception_data_FD <- contraception_data_FD %>%
+  mutate(Q29_OC_patch_ring_capsule = case_when(
+    Q29_OC_patch_ring_capsule == "2" ~ "yes",
+    TRUE ~ "no"
+  ))
+```
+
+Number of individuals enrolled in the studies: 
+
+  * FinDonor: `r indiv_donations_data %>% distinct(releaseID) %>% nrow()`
+  * FinRisk97: `r fr1997 %>% distinct(RELEASE_ID) %>% nrow()`
+  * Health2000: `r h2000 %>% distinct(RELEASE_ID) %>% nrow()`
+        
+Number of individuals enrolled after removing participants who have no ferritin data (and for blood donors for any donation event):  
+
+  * FinDonor: `r indiv_donations_data %>%  filter(!is.na(Ferritin)) %>% distinct(releaseID) %>% nrow()`
+  * FinRisk97: `r fr1997 %>%  filter(!is.na(FERRITIN)) %>% distinct(RELEASE_ID) %>% nrow()`
+  * Health2000: `r h2000 %>%  filter(!is.na(FERRITIINI)) %>% distinct(RELEASE_ID) %>% nrow()`
+
+```{r , warning=FALSE}
+#FINDONOR
+## Get sex for each blood donor
+blood_data_summary <- indiv_donations_data %>% 
+  group_by(releaseID) %>% 
+  summarise(Sex=first(gender)) 
+
+## Get values for first study donation with the required measurements donation (regardless of donation type)
+## We remove events with no Ferritin
+
+blood_values_init <- indiv_donations_data %>% 
+  filter(!is.na(Ferritin)) %>% 
+  group_by(releaseID) %>% 
+  filter(date == min(date)) %>% 
+  dplyr::select(age, Ferritin, Hb_v, CRP, DaysToPreviousFB, releaseID, Cohort, origcohort) %>% 
+  ungroup()
+
+blood_data_summary <- blood_data_summary %>% 
+    full_join(blood_values_init, by = "releaseID") 
+
+blood_data_summary <- donor_demo %>%
+  inner_join(blood_data_summary, by = "releaseID") %>%
+  mutate(all_study_FB_donation_count = NonFinnDonorDonationCount_FB + YesFinnDonorDonationCount_FB) 
+
+## Joing hormonal contraception data
+blood_data_summary <- blood_data_summary %>%
+  left_join(
+    contraception_data_FD, by = c("releaseID" = "releaseID"))
+
+#FINRISK97 
+
+## Change sex from binary 1,2 to men, women
+fr1997$SUKUP <- gsub("1", "Men", fr1997$SUKUP)
+fr1997$SUKUP <- gsub("2", "Women", fr1997$SUKUP)
+
+fr1997_summary <- fr1997 %>%
+  filter(!is.na(FERRITIN)) %>%
+  group_by(RELEASE_ID) %>%
+  dplyr::select(IKA, SUKUP, FERRITIN, HGB, CRP, RELEASE_ID, K129, BMI, KY100_22, KY163, GRAVID, Cohort, origcohort, ALUE, PAINO, PITUUS, TUPI3, KY151, Q38) %>%
+  ungroup()
+
+#HEALTH2000
+## Change sex from binary 1,2 to men, women
+h2000$SP2 <- gsub("1", "Men", h2000$SP2)
+h2000$SP2 <- gsub("2", "Women", h2000$SP2)  
+  
+ h2000_summary <- h2000 %>%
+    filter(!is.na(FERRITIINI)) %>%
+    group_by(RELEASE_ID) %>%
+    dplyr::select(IKA2, SP2, FERRITIINI, B_Hb, CRP, RELEASE_ID, BD03, BMII_BMI, FB01, FB02, FB03, FB05, synnytys, BD07, Cohort, origcohort, MENOP, BD06, MP_2000, BMII_PAINO, BMII_PITUUS, BD26, BA26C_1) %>%
+    ungroup()  
+  
+```
+
+Insulin-dependent DM is an exclusion criteria, so the variable used for exclusion needs to be prepared.
+
+* Fr97: Q38 What type of medication for diabetes, prescribed by a physician, are you currently using? 1) none 2) insulin 3) tablet 4) insulin + tablet 
+* H2000: BA26C_1 (answer if yes for DM in BA26) Are you currently using 1) tablets 2) insulin 3) both
+
+```{r}
+## fr1997
+fr1997_summary <- fr1997_summary %>% 
+  mutate(Q38 = case_when(
+    Q38 == "2" ~ "1",
+    Q38 == "4" ~ "1",
+    TRUE ~ "0")) 
+
+## h2000 
+h2000_summary <- h2000_summary %>% 
+  mutate(BA26C_1 = case_when(
+    BA26C_1 == "2" ~ "1",
+    BA26C_1 == "3" ~ "1",
+    TRUE ~ "0")) 
+```
+
+Nadler's equation requires height in m. FinRisk97 already has height in m, the other cohorts need to be converted from cm to m. 
+
+```{r}
+# FinDonor
+blood_data_summary$height_m <- blood_data_summary$height/100
+
+# HEALTH00
+h2000_summary$height_m <- h2000_summary$BMII_PITUUS/100
+```
+
+
+### Variable names
+
+Next we rename the variables. 
+
+```{r}
+## Participant ID 
+names(blood_data_summary)[names(blood_data_summary) == "releaseID"] <- "ID"
+names(fr1997_summary)[names(fr1997_summary) == "RELEASE_ID"] <- "ID"
+names(h2000_summary)[names(h2000_summary) == "RELEASE_ID"] <- "ID"
+
+## Sex
+names(fr1997_summary)[names(fr1997_summary) == "SUKUP"] <- "Sex"
+names(h2000_summary)[names(h2000_summary) == "SP2"] <- "Sex"
+
+## Age
+names(fr1997_summary)[names(fr1997_summary) == "IKA"] <- "Age"
+names(h2000_summary)[names(h2000_summary) == "IKA2"] <- "Age"
+
+## Hemoglobin
+names(blood_data_summary)[names(blood_data_summary) == "Hb_v"] <- "Hb"
+names(fr1997_summary)[names(fr1997_summary) == "HGB"] <- "Hb"
+names(h2000_summary)[names(h2000_summary) == "B_Hb"] <- "Hb"
+
+## Ferritin
+names(fr1997_summary)[names(fr1997_summary) == "FERRITIN"] <- "Ferritin"
+names(h2000_summary)[names(h2000_summary) == "FERRITIINI"] <- "Ferritin"
+
+## Menstruation
+names(blood_data_summary)[names(blood_data_summary) == "QR79"] <- "Menstruation"
+names(fr1997_summary)[names(fr1997_summary) == "K129"] <- "Menstruation"
+names(h2000_summary)[names(h2000_summary) == "BD03"] <- "Menstruation"
+
+## BMI
+names(h2000_summary)[names(h2000_summary) == "BMII_BMI"] <- "BMI"
+
+## Smoking
+names(blood_data_summary)[names(blood_data_summary) == "QR54"] <- "Smoking"
+names(fr1997_summary)[names(fr1997_summary) == "TUPI3"] <- "Smoking"
+names(h2000_summary)[names(h2000_summary) == "FB01"] <- "EverSmoked"
+names(h2000_summary)[names(h2000_summary) == "FB02"] <- "Smoked100"
+names(h2000_summary)[names(h2000_summary) == "FB03"] <- "RegSmoked"
+names(h2000_summary)[names(h2000_summary) == "FB05"] <- "Smoking"
+
+## Red meat
+names(blood_data_summary)[names(blood_data_summary) == "QR40"] <- "RedMeat"
+names(fr1997_summary)[names(fr1997_summary) == "KY100_22"] <- "RedMeat"
+
+## Iron supplements
+names(blood_data_summary)[names(blood_data_summary) == "vita_iron"] <- "HistoryOfIronSupplements"
+names(blood_data_summary)[names(blood_data_summary) == "iron_supp"] <- "GivenIronSupplements"
+names(blood_data_summary)[names(blood_data_summary) == "iron_comp"] <- "IronComplience"
+names(blood_data_summary)[names(blood_data_summary) == "iron_comp_c"] <- "IronComplienceNumeric"
+
+## History of childbirth
+names(blood_data_summary)[names(blood_data_summary) == "QR83"] <- "PreviousChildbirth"
+names(fr1997_summary)[names(fr1997_summary) == "KY163"] <- "PreviousChildbirth"
+names(h2000_summary)[names(h2000_summary) == "synnytys"] <- "PreviousChildbirth"
+
+## Current pregnancy
+names(fr1997_summary)[names(fr1997_summary) == "GRAVID"] <- "CurrentPregnancy"
+names(h2000_summary)[names(h2000_summary) == "BD07"] <- "CurrentPregnancy"
+
+## Region
+names(fr1997_summary)[names(fr1997_summary) == "ALUE"] <- "Region"
+names(h2000_summary)[names(h2000_summary) == "MP_2000"] <- "Region"
+
+## Weight
+names(blood_data_summary)[names(blood_data_summary) == "weight"] <- "Weight"
+names(fr1997_summary)[names(fr1997_summary) == "PAINO"] <- "Weight"
+names(h2000_summary)[names(h2000_summary) == "BMII_PAINO"] <- "Weight"
+
+## Height
+names(blood_data_summary)[names(blood_data_summary) == "height_m"] <- "Height"
+names(fr1997_summary)[names(fr1997_summary) == "PITUUS"] <- "Height"
+names(h2000_summary)[names(h2000_summary) == "height_m"] <- "Height"
+
+## Hormonal contraception
+names(blood_data_summary)[names(blood_data_summary) == "Q29_OC_patch_ring_capsule"] <- "HormonalContraception"
+names(fr1997_summary)[names(fr1997_summary) == "KY151"] <- "HormonalContraception"
+names(h2000_summary)[names(h2000_summary) == "BD26"] <- "HormonalContraception"
+
+## Insulin-dependent DM
+names(fr1997_summary)[names(fr1997_summary) == "Q38"] <- "DM_insulin"
+names(h2000_summary)[names(h2000_summary) == "BA26C_1"] <- "DM_insulin"
+
+## Reason for no menstruation (not needed for analysis)
+names(h2000_summary)[names(h2000_summary) == "BD06"] <- "WhyEnd"
+```
+
+
+### Nadler's equation for estimating blood volume 
+
+Nadler's equation (https://pubmed.ncbi.nlm.nih.gov/30252333/) can be used to estimate blood volume:
+
+Men: $Blood Volume = (0.3669 × H^3) + (0.03219 × W) + 0.6041$ 
+Women: $Blood Volume = (0.3561 × H^3) + (0.03308 × W) + 0.1833$
+
+Create a new variable for blood volume based on Nadler's formula
+
+```{r}
+# FinDonor
+blood_data_summary <- blood_data_summary %>%
+  mutate(blood_vol = case_when(
+    Sex == "Women" ~ (0.3561 * Height^3) + (0.03308 * Weight) + 0.1833,
+    Sex == "Men"  ~ (0.3669 * Height^3) + (0.03219 * Weight) + 0.6041
+  )) 
+#FINRISK97
+fr1997_summary <- fr1997_summary %>%
+  mutate(blood_vol = case_when(
+    Sex == "Women" ~ (0.3561 * Height^3) + (0.03308 * Weight) + 0.1833,
+    Sex == "Men"  ~ (0.3669 * Height^3) + (0.03219 * Weight) + 0.6041
+  )) 
+# HEALTH00
+h2000_summary <- h2000_summary %>%
+  mutate(blood_vol = case_when(
+    Sex == "Women" ~ (0.3561 * Height^3) + (0.03308 * Weight) + 0.1833,
+    Sex == "Men"  ~ (0.3669 * Height^3) + (0.03219 * Weight) + 0.6041
+  )) 
+```
+
+## Demographic group specification and assignment (coninued after "figuring out why so many Health2000 participants are removed" section)
+
+In this section we assign women to period/no period groups. The menstruation question was similar across all three cohorts:
+
+  * FinDonor: Do you still have regular periods? (1=reg., 2=irreg., 3=no)
+  * FinRisk97: Do you still menstruate? (1=reg., 2=irreg., 3=no)
+  * Health2000: BD03 = do you have periods nowadays? (1=reg., 2=irreg., 3=no)
+
+There are "r cohort_summary_name %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()" women with no  answer to the question regarding their menstrual status. 
+
+  * FinDonor: `r blood_data_summary %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  * FinRisk97: `r fr1997_summary %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  * Health00: `r h2000_summary %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  
+Evidently we are missing menstruation data from >37 % of female Health2000 participants. Average age of menopause is 51 years, but can occur between age 45-55 years.  In the home interview instruction (https://thl.fi/documents/189940/4108213/T2001_eng.pdf/cd17a5fe-ddf3-4649-9ddd-a282b1809de9, page 41) we find out that only women under the age of 55 yrs were asked about menstruation. This amounts to:
+  * # NAs in the H2000 <55 yrs group `r h2000_summary %>% filter(Sex == "Women" & Age < 55 & is.na(Menstruation)) %>%  nrow()`
+  * # NAs in the H2000 >=55 yrs group `r h2000_summary %>% filter(Sex == "Women" & Age >= 55 & is.na(Menstruation)) %>%  nrow()`
+For the two other cohorts (Findonor, FR1997):
+  * # NAs in the FR1997 <55 yrs group `r fr1997_summary %>% filter(Sex == "Women" & Age < 55 & is.na(Menstruation)) %>%  nrow()`
+  * # NAs in the FR1997 >=55 yrs group `r fr1997_summary %>% filter(Sex == "Women" & Age >= 55 & is.na(Menstruation)) %>%  nrow()`
+  * # NAs in the Findonor <55 yrs group `r blood_data_summary %>% filter(Sex == "Women" & Age < 55 & is.na(Menstruation)) %>%  nrow()`
+  * # NAs in the Findonor >=55 yrs group `r blood_data_summary %>% filter(Sex == "Women" & Age >= 55 & is.na(Menstruation)) %>%  nrow()`
+  
+In order to remove as few women as possible from analysis, we assign women of age 55y and older with no answer to the menstruation question to the non-menstuating group, as it is highly unlikely they still menstruate after this age.
+
+  * FinDonor: `r blood_data_summary %>% filter(Sex == "Women" & is.na(Menstruation) & Age >= 55) %>%  nrow()`
+  * FinRisk97: `r fr1997_summary %>% filter(Sex == "Women" & is.na(Menstruation) & Age >= 55) %>%  nrow()`
+  * Health2000: `r h2000_summary %>% filter(Sex == "Women" & is.na(Menstruation) & Age >= 55) %>%  nrow()`
+
+```{r}
+# FINDONOR
+older_findonor_donors <- filter(blood_data_summary,
+                       Sex == "Women" & is.na(Menstruation) & Age >= 55)$ID
+
+blood_data_summary_final <- blood_data_summary %>% 
+  mutate(Menstruation = ifelse(ID %in% older_findonor_donors, "no_period", as.character(Menstruation))) 
+
+# FINRISK97
+older_fr1997 <- filter(fr1997_summary, 
+                       Sex == "Women" & is.na(Menstruation) & Age >= 55)$ID
+
+fr1997_summary_final <- fr1997_summary %>% 
+  mutate(Menstruation = ifelse(ID %in% older_fr1997, "no_period", as.character(Menstruation)))
+
+# HEALTH2000
+older_h2000 <- filter(h2000_summary,
+                      Sex == "Women" & is.na(Menstruation) & Age >= 55)$ID
+
+h2000_summary_final <- h2000_summary %>%
+  mutate(Menstruation = ifelse(ID %in% older_h2000, "no_period", as.character(Menstruation)))
+
+```
+
+In the original ID prevalcence plots (with no filtering except for NA:s for ferritin and Hb), there was a clear difference between prevalence rates in women younger than and older than 50 years old. As we are interested in exploring differences between these two age groups in the regression analysis, we define the following three groups:
+
++ men: all men 
++ premenopausal: female and age <= 50
++ postmenopausal: female and age > 50
+
+This grouping of women is based on age, and not menstrual status itself (meaning menopause is defined by being aged 51 or older).
+
+```{r}
+#FINDONOR:
+## We define the women's groups and drop n/a:s: 
+blood_data_summary_final <- blood_data_summary_final %>% 
+  mutate(Group = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & (Age > 50) ~ "Post_menopause_women",
+    Sex == "Women" & (Age <= 50) ~ "Pre_menopause_women",
+    TRUE ~ "NA")) %>% 
+  droplevels() %>% 
+  mutate(Group = ordered(Group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men"))) 
+
+#FINRISK97:
+## We define the women's groups and drop n/a:s: 
+fr1997_summary_final <- fr1997_summary_final %>% 
+  mutate(Group = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & (Age > 50) ~ "Post_menopause_women",
+    Sex == "Women" & (Age <= 50) ~ "Pre_menopause_women",
+    TRUE ~ "NA")) %>% 
+  droplevels() %>% 
+  mutate(Group = ordered(Group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men"))) 
+ 
+#HEALTH2000:
+
+h2000_summary_final <- h2000_summary_final %>%
+  mutate(Group = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & (Age > 50) ~ "Post_menopause_women",
+    Sex == "Women" & (Age <= 50) ~ "Pre_menopause_women",
+    TRUE ~ "NA")) %>%
+  droplevels() %>%
+  mutate(Group = ordered(Group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men")))
+```
+
+In order to later merge the three cohorts into one table, we need to make colums for the variables missing variables in each cohort and impute values for them. 
+
+The general population cohorts don't contain any information on blood donor activity. As seen in a previous FinDonor study the effect of full blood donation on ferritin levels is marginal after 1000 days (see Lobier et al. 2019, https://pubmed.ncbi.nlm.nih.gov/31408501/). After referring to these results we decided to assign a randomized donation interval between three to six years for the general population cohorts.  
+
+```{r}
+# Add new columns and impute values for them
+
+blood_data_summary_final$CurrentPregnancy <- 0 
+
+fr1997_summary_final$TwoYearsFromStartCount_FB <- 0
+fr1997_summary_final$HistoryOfIronSupplements <- NA
+fr1997_summary_final$GivenIronSupplements <- 0
+fr1997_summary_final$IronComplience <- 0
+fr1997_summary_final$IronComplienceNumeric <- 0
+
+h2000_summary_final$TwoYearsFromStartCount_FB <- 0
+h2000_summary_final$HistoryOfIronSupplements <- NA
+h2000_summary_final$GivenIronSupplements <- 0
+h2000_summary_final$IronComplience <- 0
+h2000_summary_final$IronComplienceNumeric <- 0
+h2000_summary_final$RedMeat <- NA
+
+# We then  assign a randomized donation interval for 3-6 years for the general population cohorts 
+fr1997_summary_final <- fr1997_summary_final %>% mutate(DaysToPreviousFB = round(runif(nrow(fr1997_summary_final), min = 3*365, max = 6*365) ,0))
+h2000_summary_final <- h2000_summary_final %>% mutate(DaysToPreviousFB = round(runif(nrow(h2000_summary_final), min = 3*365, max = 6*365) ,0))
+```
+
+We also need to rename observations for the menstruation variable in general population participants in order to match blood donors.
+
+```{r}
+blood_data_summary_final <- blood_data_summary_final %>% 
+  mutate(Menstruation = case_when(
+    Sex == "Women" & (Menstruation == "no_period") ~ "No",
+    Sex == "Women" & (Menstruation == "irregular_period") ~ "Yes",
+    Sex == "Women" & (Menstruation == "regular_period") ~ "Yes",
+    TRUE ~ "NA")) %>% 
+  mutate(Menstruation = ordered(Menstruation, levels =  c("No", "Yes"))) 
+
+fr1997_summary_final <- fr1997_summary_final %>% 
+  mutate(Menstruation = case_when(
+    Sex == "Women" & (Menstruation == "3") ~ "No",
+    Sex == "Women" & (Menstruation == "no_period") ~ "No",
+    Sex == "Women" & (Menstruation == "2") ~ "Yes",
+    Sex == "Women" & (Menstruation == "1") ~ "Yes",
+    TRUE ~ "NA")) %>% 
+  mutate(Menstruation = ordered(Menstruation, levels =  c("No", "Yes"))) 
+
+h2000_summary_final <- h2000_summary_final %>% 
+  mutate(Menstruation = case_when(
+    Sex == "Women" & (Menstruation == "3") ~ "No",
+    Sex == "Women" & (Menstruation == "no_period") ~ "No",
+    Sex == "Women" & (Menstruation == "2") ~ "Yes",
+    Sex == "Women" & (Menstruation == "1") ~ "Yes",
+    TRUE ~ "NA")) %>% 
+  mutate(Menstruation = ordered(Menstruation, levels =  c("No", "Yes"))) 
+```
+
+Finally, we will need the smoking variables to just give us informaton on current smoking behaviour, not past smoking. This does not need to be done in the FinDonor cohort, as the variable gives us the information we want as it is.
+
+FinRisk97:
+TUPI3 was the chosen variable. It's a mutation built out of four separate variables in the FinRisk questionnaire:
+1=Never smoked regurarly --> 0
+2=Stopped smoking >1/2 years ago --> 0
+3=Stopped smoking <1/2 years ago --> 0
+4=Smokes --> 1
+
+Health00:
+For this cohort there was no mutated variable available, so we had to build our own from the following available questions:
+FB01. Have you ever smoked during your life time?
+1 yes
+0 no → GA01
+FB02. Have you smoked at least 100 times during your life time (cigarettes, cigars or pipe tobacco)?
+1 yes
+0 no → GA01 
+FB03. Have you ever smoked daily for at least one year?
+1 yes
+0 no → FB05
+FB05. Do you smoke nowadays (cigarettes, cigars or pipe):
+1 daily
+2 occasionally
+3 not at all
+
+People who have never smoked (FB01=EverSmoked), have smoked <100 cigarettes in their lifetime (FB02=Smoked100), have not smoked daily for at least 1 year (FB03=SmokedReg) or smoke occasionally/not at all (FB05=Smoking) are imputed as non-smokers (0). Participants who report daily smoking (FB05=Smoking) are imputed as smokers (1).
+
+```{r}
+# FinRisk97
+fr1997_summary_final <- fr1997_summary_final %>% 
+  mutate(Smoking = case_when(
+    Smoking == "4" ~ 1,
+    Smoking %in% c("1", "2", "3") ~ 0))
+  
+# Health2000
+h2000_summary_final <- h2000_summary_final %>% 
+  mutate(Smoking = case_when(
+            Smoking == "1" ~ 1,
+            Smoking %in% c("2" , "3") ~ 0,
+            EverSmoked == "0" ~ 0,
+            Smoked100 == "0" ~ 0,
+            RegSmoked == "0" ~ 0))
+```
+
+## Remove cohort participants with missing data
+
+Start by checking if there is missing data
+
+```{r}
+# FinDonor
+## Men
+colSumsFD_M <- colSums(is.na(blood_data_summary_final %>% filter(Group == "Men")))
+colSumsFD_M
+# Premenopausal
+colSumsFD_Pre <- colSums(is.na(blood_data_summary_final %>% filter(Group == "Pre_menopause_women")))
+colSumsFD_Pre
+# Postmenopausal
+colSumsFD_Post <- colSums(is.na(blood_data_summary_final %>% filter(Group == "Post_menopause_women")))
+colSumsFD_Post
+
+# FinRisk97
+## Men
+colSumsFR_M <- colSums(is.na(fr1997_summary_final %>% filter(Group == "Men")))
+colSumsFR_M
+## Premenopausal
+colSumsFR_Pre <- colSums(is.na(fr1997_summary_final %>% filter(Group == "Pre_menopause_women")))
+colSumsFR_Pre
+## Postmenopausal
+colSumsFR_Post <- colSums(is.na(fr1997_summary_final %>% filter(Group == "Post_menopause_women")))
+colSumsFR_Post
+
+# Health2000
+## Men
+colSumsH2_M <- colSums(is.na(h2000_summary_final %>% filter(Group == "Men")))
+colSumsH2_M
+## Premenopausal
+colSumsH2_Pre <- colSums(is.na(h2000_summary_final %>% filter(Group == "Pre_menopause_women")))
+colSumsH2_Pre
+## Postmenopausal
+colSumsH2_Post <- colSums(is.na(h2000_summary_final %>% filter(Group == "Post_menopause_women")))
+colSumsH2_Post
+```
+All three cohorts contain NA:s, these have to be removed before regression analysis. 
+
+### Donation history
+
+We remove `r blood_data_summary_final %>% filter(is.na(DaysToPreviousFB)) %>% nrow()` blood donors who have not donated previously (they are missing the number of days since last donation variable). 
+
+```{r}
+new_donors_data <- blood_data_summary_final %>% 
+  filter(is.na(DaysToPreviousFB)) %>% 
+    mutate(Group = case_when(Group == "Pre_menopause_women" ~ "Pre-menopausal women",
+                   Group == "Post_menopause_women" ~ "Post-menopausal women",
+                   Group == "Men" ~ "Men" ,
+                   TRUE~ "NA"),
+         Group = ordered(Group)) 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  drop_na(DaysToPreviousFB)
+```
+
+### Age
+
+Participants missing age data:
+ * FinDonor: `r blood_data_summary_final %>% filter(is.na(Age)) %>% nrow()`
+ * FinRisk97: `r fr1997_summary_final %>% filter(is.na(Age)) %>% nrow()`
+ * Health2000: `r h2000_summary_final %>% filter(is.na(Age)) %>% nrow()`
+
+### Sex
+
+Participants missing data on sex:
+ * FinDonor: `r blood_data_summary_final %>% filter(is.na(Sex)) %>% nrow()`
+ * FinRisk97: `r fr1997_summary_final %>% filter(is.na(Sex)) %>% nrow()`
+ * Health2000: `r h2000_summary_final %>% filter(is.na(Sex)) %>% nrow()`
+
+### BMI and blood volume
+
+We remove "cohort_name %>% filter(is.na(BMI)) %>% nrow()" participants for whom we do not have the BMI data (this also removes participants for whom we don't have data on blood volume):
+ * FinDonor: `r blood_data_summary_final %>% filter(is.na(BMI)) %>% nrow()`
+ * FinRisk97: `r fr1997_summary_final %>% filter(is.na(BMI)) %>% nrow()`
+ * Health2000: `r h2000_summary_final %>% filter(is.na(BMI)) %>% nrow()`
+ 
+```{r}
+#### FinDonor
+nb_removed_blood <- blood_data_summary_final %>% filter(is.na(BMI)) %>% nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!is.na(BMI))
+
+#### FinRisk97
+nb_removed_fr97 <- fr1997_summary_final %>% filter(is.na(BMI)) %>% nrow() 
+
+fr1997_summary_final <- fr1997_summary_final %>% 
+  filter(!is.na(BMI))
+
+#### Health2000
+nb_removed_h2000 <- h2000_summary_final %>% filter(is.na(BMI)) %>% nrow() 
+
+h2000_summary_final <- h2000_summary_final %>% 
+  filter(!is.na(BMI))
+```
+
+### Smoking
+
+We remove "cohort_name %>% filter(is.na(BMI)) %>% nrow()" participants for whom we do not have smoking data:
+  * FinDonor: `r blood_data_summary_final %>% filter(is.na(Smoking)) %>% nrow()`
+  * FinRisk97: `r fr1997_summary_final  %>% filter(is.na(Smoking)) %>% nrow()`
+  * Health2000: `r h2000_summary_final %>% filter(is.na(Smoking)) %>% nrow()` 
+
+```{r}
+# FinDonor
+nb_removed_blood <- nb_removed_blood +
+                            blood_data_summary_final %>% filter(is.na(Smoking)) %>% nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!is.na(Smoking))
+
+# FinRisk97
+nb_removed_fr97 <- nb_removed_fr97 +
+                            fr1997_summary_final %>% filter(is.na(Smoking)) %>% nrow()
+
+fr1997_summary_final <- fr1997_summary_final %>%
+  filter(!is.na(Smoking))
+
+# Health2000
+nb_removed_h2000 <- nb_removed_h2000 +
+                            h2000_summary_final %>% filter(is.na(Smoking)) %>% nrow()
+
+h2000_summary_final <- h2000_summary_final %>%
+  filter(!is.na(Smoking))
+
+```
+
+### Menstruation
+
+Female study participants with no menstruation response (after imputation) are removed: "cohort_name %>% filter(sex == "Women" & is.na(Menstruation)) %>% nrow()" donors.)
+
+  * FinDonor: `r blood_data_summary_final %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  * FinRisk97: `r fr1997_summary_final %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+  * Health2000: `r h2000_summary_final %>% filter(Sex == "Women" & is.na(Menstruation)) %>%  nrow()`
+
+```{r}
+#FINDONOR
+findonor_nb_women_no_menstruation_response <- blood_data_summary_final %>% filter(Sex == "Women" & is.na(Menstruation)) %>% nrow()
+nb_removed_blood <- nb_removed_blood + findonor_nb_women_no_menstruation_response
+
+## remove female donors with no menstruation response
+blood_data_summary_final <- blood_data_summary_final %>% 
+  mutate(mens_ok_blood = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & !is.na(Menstruation)  ~ "Women",
+    TRUE ~ "NA")) %>% 
+  filter(mens_ok_blood != "NA") 
+
+#FINRISK97
+
+finrisk_nb_women_no_menstruation_response <- fr1997_summary_final %>% filter(Sex == "Women" & is.na(Menstruation)) %>% nrow()
+nb_removed_fr97 <- nb_removed_fr97 + finrisk_nb_women_no_menstruation_response
+
+## remove female FinRisk97 participants with no menstruation response
+fr1997_summary_final <- fr1997_summary_final %>% 
+  mutate(mens_ok_fr1997 = case_when(
+    Sex == "Men" ~ "Men", 
+    Sex == "Women" & !is.na(Menstruation)  ~ "Women",
+    TRUE ~ "NA")) %>% 
+  filter(mens_ok_fr1997 != "NA") 
+
+#HEALTH2000
+
+# h2000_summary_final <- h2000_summary_final %>%
+#   mutate(Menstruation = ifelse(ID %in% older_h2000, "no_period", as.character(Menstruation)))
+
+h2000_nb_women_no_menstruation_response <- h2000_summary_final %>% filter(Sex == "Women" & is.na(Menstruation)) %>% nrow()
+nb_removed_h2000 <- nb_removed_h2000 + h2000_nb_women_no_menstruation_response
+
+## remove female Health2000 participants with no menstruation response
+h2000_summary_final <- h2000_summary_final %>%
+  mutate(mens_ok_h2000 = case_when(
+    Sex == "Men" ~ "Men",
+    Sex == "Women" & !is.na(Menstruation)  ~ "Women",
+    TRUE ~ "NA")) %>%
+  filter(mens_ok_h2000 != "NA")
+```
+
+### Previous childbirth
+
+We remove "cohort_name %>% filter((group != "Men" & is.na(PreviousChildbirth)))%>% nrow()" female donors who did not answer the question on childbirth:
+  * FinDonor: `r blood_data_summary_final %>% filter((Group != "Men" & is.na(PreviousChildbirth)))%>% nrow()`
+  * FinRisk97: `r fr1997_summary_final %>% filter((Group != "Men" & is.na(PreviousChildbirth)))%>% nrow()`
+  * Health2000: `r h2000_summary_final %>% filter((Group != "Men" & is.na(PreviousChildbirth)))%>% nrow()`
+
+```{r}
+#### FinDonor
+nb_removed_blood <- nb_removed_blood +
+                            blood_data_summary_final %>% filter((Group != "Men" & is.na(PreviousChildbirth))) %>% nrow
+
+blood_data_summary_final <- blood_data_summary_final %>%
+  filter(!(Group != "Men" & is.na(PreviousChildbirth)))
+
+#### FinRisk97
+nb_removed_fr97 <- nb_removed_fr97 +
+                            fr1997_summary_final %>% filter((Group != "Men" & is.na(PreviousChildbirth))) %>% nrow
+
+fr1997_summary_final <- fr1997_summary_final %>%
+  filter(!(Group != "Men" & is.na(PreviousChildbirth)))
+
+#### Health2000
+nb_removed_h2000 <- nb_removed_h2000 +
+                            h2000_summary_final %>% filter((Group != "Men" & is.na(PreviousChildbirth))) %>% nrow
+
+h2000_summary_final <- h2000_summary_final %>%
+  filter(!(Group != "Men" & is.na(PreviousChildbirth)))
+
+```
+
+
+### Hormonal contraception
+
+In health2000, only women <55y were asked if they are currently using HC. Women over 55y are imputed as "no" as not to lose them in the analysis. 
+
+Use of HC in Health2000 study 
+
+```{r}
+# Use of HC by group
+table(h2000_summary_final$Group, h2000_summary_final$HormonalContraception)
+
+# NA in premenopausal women
+h2000_summary_final %>% filter((Group == "Pre_menopause_women" & is.na(HormonalContraception))) %>% nrow()
+# Total number of premenopausal women
+h2000_summary_final %>% filter((Group == "Pre_menopause_women")) %>% nrow()
+
+# NA in postmenopausal women
+h2000_summary_final %>% filter((Group == "Post_menopause_women" & is.na(HormonalContraception))) %>% nrow()
+# NA in the the postmenopausal >55y age group
+h2000_summary_final %>% filter((Group == "Post_menopause_women" & Age > 55 & is.na(HormonalContraception))) %>% nrow()
+# Total number of postmenopausal women
+h2000_summary_final %>% filter((Group == "Post_menopause_women")) %>% nrow()
+
+
+
+```
+
+  * FinDonor: `r blood_data_summary_final %>% filter(Sex == "Women" & is.na(HormonalContraception) & Age >= 55) %>%  nrow()`
+  * FinRisk97: `r fr1997_summary_final %>% filter(Sex == "Women" & is.na(HormonalContraception) & Age >= 55) %>%  nrow()`
+  * Health2000: `r h2000_summary_final %>% filter(Sex == "Women" & is.na(HormonalContraception) & Age >= 55) %>%  nrow()`
+
+```{r}
+# FINDONOR
+older_findonor_donors_hc <- filter(blood_data_summary_final,
+                       Sex == "Women" & is.na(HormonalContraception) & Age >= 55)$ID
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  mutate(HormonalContraception = ifelse(ID %in% older_findonor_donors_hc, "no", as.character(HormonalContraception))) 
+
+# FINRISK97
+older_fr1997_hc <- filter(fr1997_summary_final, 
+                       Sex == "Women" & is.na(HormonalContraception) & Age >= 55)$ID
+
+fr1997_summary_final <- fr1997_summary_final %>% 
+  mutate(HormonalContraception = ifelse(ID %in% older_fr1997_hc, "no", as.character(HormonalContraception)))
+
+# HEALTH2000
+older_h2000_hc <- filter(h2000_summary_final,
+                      Sex == "Women" & is.na(HormonalContraception) & Age >= 55)$ID
+
+h2000_summary_final <- h2000_summary_final %>%
+  mutate(HormonalContraception = ifelse(ID %in% older_h2000_hc, "no", as.character(HormonalContraception)))
+
+```
+
+We remove "cohort_name %>% filter((group != "Men" & is.na(HormonalContraception)))%>% nrow()" women who did not answer the question on hormonal contraception:
+  * FinDonor: `r blood_data_summary_final %>% filter((Group != "Men" & is.na(HormonalContraception))) %>% nrow()`
+  * FinRisk97: `r fr1997_summary_final %>% filter((Group != "Men"& is.na(HormonalContraception)))%>% nrow()`
+  * Health2000: `r h2000_summary_final %>% filter((Group != "Men" & is.na(HormonalContraception)))%>% nrow()`
+
+```{r}
+### FinDonor
+nb_removed_blood <- nb_removed_blood +
+                            blood_data_summary_final %>% filter((Group != "Men" & is.na(HormonalContraception))) %>% nrow
+
+blood_data_summary_final <- blood_data_summary_final %>%
+  filter(!(Group != "Men" & is.na(HormonalContraception)))
+
+#### FinRisk97
+nb_removed_fr97 <- nb_removed_fr97 +
+                            fr1997_summary_final %>% filter((Group != "Men" & is.na(HormonalContraception))) %>% nrow
+
+fr1997_summary_final <- fr1997_summary_final%>%
+  filter(!(Group != "Men" & is.na(HormonalContraception)))
+
+#### Health2000
+nb_removed_h2000 <- nb_removed_h2000 +
+                            h2000_summary_final %>% filter((Group != "Men" & is.na(HormonalContraception))) %>% nrow
+
+h2000_summary_final <- h2000_summary_final %>%
+  filter(!(Group != "Men" & is.na(HormonalContraception)))
+
+```
+
+
+### Current pregnancy
+
+Only women <45 yrs were asked whether they are currently pregnant and if so, how many weeks (source: https://www.julkari.fi/bitstream/handle/10024/78181/2005b6.pdf?sequence=1&isAllowed=y, page 56). We added a filter for age <45 years old and imputed NA:s in >45-year-olds as not pregnant. Although pregnancy is possible after this age, chances are much lower.  
+
+We will now remove "cohort_name %>% filter((Group != "Men" & is.na(CurrentPregnancy)))%>% nrow()" females who did not answer the pregnancy question: 
+  * FinRisk97: `r fr1997_summary_final %>% filter((Group != "Men" & is.na(CurrentPregnancy)))%>% nrow()`
+  * Health00: `r h2000_summary_final %>% filter((Group != "Men" & Age <=45 & is.na(CurrentPregnancy)))%>% nrow()`
+
+```{r}
+# FinRisk97
+nb_removed_fr97 <- nb_removed_fr97 +
+                            fr1997_summary_final %>% filter((Group != "Men" & is.na(CurrentPregnancy))) %>% nrow 
+
+fr1997_summary_final <- fr1997_summary_final %>% 
+  filter(!(Group != "Men" & is.na(CurrentPregnancy)))
+
+# Health2000
+nb_removed_h2000 <- nb_removed_h2000 +
+                            h2000_summary_final %>% filter((Group != "Men" & Age <=45 & is.na(CurrentPregnancy))) %>% nrow 
+
+h2000_summary_final <- h2000_summary_final %>% 
+  filter(!(Group != "Men" & Age <=45 & is.na(CurrentPregnancy)))
+
+h2000_summary_final$CurrentPregnancy[is.na(h2000_summary_final$CurrentPregnancy)]  <- 0
+```
+
+
+<!-- ### Iron supplementation  -->
+
+<!-- We remove `r blood_data_summary_final %>% mutate(IronComplienceNumeric = ifelse(GivenIronSupplements == FALSE, 0, IronComplienceNumeric )) %>%  filter(is.na(IronComplienceNumeric)) %>% nrow()` donors that did not answer the two questions (did they receive iron supplements at during their last donation and supplement complience) -->
+
+<!-- For the modelling, we impute a 0 (no supplementation) to iron_comp_c when the donor reports not being offered iron supplementation. -->
+
+<!-- This is not done for the general population cohorts, as they were not asked about iron supplementation and as such all observation are input as 0 (these questions specifically concern iron supplements provided in conjuction with blood donation).  -->
+
+<!-- ```{r} -->
+<!-- nb_removed_blood <- nb_removed_blood + -->
+<!--                             blood_data_summary_final %>%  -->
+<!--                               mutate(IronComplienceNumeric = ifelse(GivenIronSupplements == FALSE, 0, IronComplienceNumeric)) %>%  -->
+<!--                               filter(is.na(IronComplienceNumeric)) %>%  -->
+<!--                               nrow()  -->
+
+<!-- blood_data_summary_final <- blood_data_summary_final %>%  -->
+<!--   mutate(IronComplienceNumeric = ifelse(GivenIronSupplements == FALSE, 0, IronComplienceNumeric )) %>%  -->
+<!--   filter(!is.na(IronComplienceNumeric)) -->
+<!-- ``` -->
+
+
+
+
+The total number removed because of missing questionnaire data is:
+`r nb_removed_blood` 
+`r nb_removed_fr97` 
+`r nb_removed_h2000`
+
+# Exclusion criteria
+
+## Remove cohort participants who are currently pregnant
+
+As current pregnancy was an exclusion criteria for the NL general population cohort and pregnant women are not allowed to donate blood, we will remove women who are currently pregnant from the FIN general population cohorts. The number of removed participants is 
+
+  * FinRisk97: `r fr1997_summary_final %>% filter(CurrentPregnancy == 2) %>% nrow()`
+  * Health00: `r h2000_summary_final %>% filter(CurrentPregnancy == 1) %>% nrow()`
+
+FinRisk97: 1=no, 2=yes
+Health2000: 0=no, 1=yes
+
+We will also recode the FinRisk97 cohort answer of 1=no to 0=no.  
+
+```{r}
+# FinRisk97
+nb_removed_pregnant_fr1997 <- fr1997_summary_final %>% 
+   filter(CurrentPregnancy == 2) %>% 
+  nrow()
+
+fr1997_summary_final <- fr1997_summary_final %>% 
+   filter(!(Group != "Men" & CurrentPregnancy == 2))
+
+
+fr1997_summary_final$CurrentPregnancy[fr1997_summary_final$CurrentPregnancy == "1"] <- 0
+
+#Health2000
+nb_removed_pregnant_h2000 <- h2000_summary_final %>% 
+   filter((CurrentPregnancy == 1)) %>% 
+  nrow()
+
+h2000_summary_final <- h2000_summary_final %>% 
+   filter(!(Group != "Men" & CurrentPregnancy == 1))
+```
+
+## Remove cohort participants who have DM1
+
+General population cohort participants who have DM1 are excluded as they are excluded in the Dutch general population cohort due to study design. The number of removed participants is: 
+
+  * FinRisk97: `r fr1997_summary_final %>% filter(DM_insulin == 1) %>% nrow()`
+  * Health00: `r h2000_summary_final %>% filter(DM_insulin == 1) %>% nrow()`
+
+
+```{r}
+# FinRisk97
+nb_removed_DM_fr1997 <- fr1997_summary_final %>%
+   filter(DM_insulin == 1) %>%
+  nrow()
+
+fr1997_summary_final <- fr1997_summary_final %>%
+   filter(!(DM_insulin == 1))
+
+#Health2000
+nb_removed_DM_h2000 <- h2000_summary_final %>%
+   filter((DM_insulin == 1)) %>%
+  nrow()
+
+h2000_summary_final <- h2000_summary_final %>%
+   filter(!(DM_insulin == 1))
+```
+
+Recheck missing data 
+
+```{r}
+# FinDonor
+## Men
+colSumsFD_M <- colSums(is.na(blood_data_summary_final %>% filter(Group == "Men")))
+colSumsFD_M
+# Premenopausal
+colSumsFD_Pre <- colSums(is.na(blood_data_summary_final %>% filter(Group == "Pre_menopause_women")))
+colSumsFD_Pre
+# Postmenopausal
+colSumsFD_Post <- colSums(is.na(blood_data_summary_final %>% filter(Group == "Post_menopause_women")))
+colSumsFD_Post
+
+# FinRisk97
+## Men
+colSumsFR_M <- colSums(is.na(fr1997_summary_final %>% filter(Group == "Men")))
+colSumsFR_M
+## Premenopausal
+colSumsFR_Pre <- colSums(is.na(fr1997_summary_final %>% filter(Group == "Pre_menopause_women")))
+colSumsFR_Pre
+## Postmenopausal
+colSumsFR_Post <- colSums(is.na(fr1997_summary_final %>% filter(Group == "Post_menopause_women")))
+colSumsFR_Post
+
+# Health2000
+## Men
+colSumsH2_M <- colSums(is.na(h2000_summary_final %>% filter(Group == "Men")))
+colSumsH2_M
+## Premenopausal
+colSumsH2_Pre <- colSums(is.na(h2000_summary_final %>% filter(Group == "Pre_menopause_women")))
+colSumsH2_Pre
+## Postmenopausal
+colSumsH2_Post <- colSums(is.na(h2000_summary_final %>% filter(Group == "Post_menopause_women")))
+colSumsH2_Post
+```
+
+## Remove participants with extreme physiological measures
+
+As decided previously, we remove data according the following criteria:
+
+* BMI > 50
+* Ferritin > 400 
+* Weight < 50kg (blood donor selection criteria) 
+
+This amounts to "cohort_name %>% filter(BMI >= 50 | Ferritin >= 400 | Weight < 50) %>% nrow()" participants that are removed. 
+  * FinDonor: `r blood_data_summary_final %>% filter(BMI >= 50 | Ferritin >= 400 | Weight < 50) %>% nrow()`
+     - BMI: `r blood_data_summary_final %>% filter(BMI >= 50) %>% nrow()`
+     - Ferritin: `r blood_data_summary_final %>% filter(Ferritin >= 400) %>% nrow()`
+     - Weight: `r blood_data_summary_final %>% filter(Weight < 50) %>% nrow()`
+  * FinRisk97: `r fr1997_summary_final %>% filter(BMI >= 50 | Ferritin >= 400 | Weight < 50) %>% nrow()`
+     - BMI: `r fr1997_summary_final %>% filter(BMI >= 50) %>% nrow()`
+     - Ferritin: `r fr1997_summary_final %>% filter(Ferritin >= 400) %>% nrow()`
+     - Weight: `r fr1997_summary_final %>% filter(Weight < 50) %>% nrow()`
+  * Health00: `r h2000_summary_final %>% filter(BMI >= 50 | Ferritin >= 400 | Weight < 50) %>% nrow()`
+       - BMI: `r h2000_summary_final %>% filter(BMI >= 50) %>% nrow()`
+       - Ferritin: `r h2000_summary_final %>% filter(Ferritin >= 400) %>% nrow()`
+       - Weight: `r h2000_summary_final %>% filter(Weight < 50) %>% nrow()`
+  
+```{r}
+# FinDonor
+## BMI
+blood_data_summary_final <- blood_data_summary_final %>% 
+   filter(BMI < 50)
+## Weight
+blood_data_summary_final <- blood_data_summary_final %>% 
+   filter(Weight >= 50)
+## Ferritin
+blood_data_summary_final <- blood_data_summary_final %>% 
+   filter(Ferritin < 400)
+
+# FinRisk97
+## BMI
+fr1997_summary_final <- fr1997_summary_final %>% 
+   filter(BMI < 50)
+## Weight
+fr1997_summary_final <- fr1997_summary_final %>% 
+   filter(Weight >= 50)
+## Ferritin
+fr1997_summary_final <- fr1997_summary_final %>% 
+   filter(Ferritin < 400)
+
+
+
+#Health2000
+## BMI
+h2000_summary_final <- h2000_summary_final %>% 
+   filter(BMI < 50)
+## Weight
+h2000_summary_final <- h2000_summary_final %>% 
+   filter(Weight >= 50)
+## Ferritin
+h2000_summary_final <- h2000_summary_final %>% 
+   filter(Ferritin < 400)
+
+```
+
+## Remove blood donors who have not donated for the past three years
+
+The Dutch blood donor population included a large percentage of inactive blood donors (>15% compared to only around 3% for the Finnish cohort). In order to compare the cohorts, it was decided to remove blood donors who had not donated for more than 3 years (1095 days)
+
+This amounts to `r blood_data_summary_final %>% filter(DaysToPreviousFB >= 1095) %>% nrow()` removed blood donors 
+
+```{r}
+# FinDonor
+blood_data_summary_final <- blood_data_summary_final %>% 
+   filter(DaysToPreviousFB < 1095)
+```
+
+# Final group N for the three cohorts (FinRisk97 and Health2000 still separate)
+
+```{r, warning=FALSE}
+# FinDonor
+blood_data_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+# FinRisk97
+fr1997_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+# Health2000
+h2000_summary_final %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+
+ 
+```
+
+
+
+## Recode variables
+
+### CRP
+
+Due to difference in the CRP measurements (hs-CRP for the general population cohorts, CRP for the blood donor cohort) we decided to impute CRP <3 mg/l to 2.9 mg/l for the general population cohorts in order to align them with the blood donor data. CRP <3 mg/l was previously imputed as 2.9 mg/ml in the blood donor cohort.
+
+```{r}
+# FinRisk97
+fr1997_summary_final <- fr1997_summary_final %>%
+  mutate(CRPori = CRP) # Save original CRP for later use
+fr1997_summary_final$CRP[fr1997_summary_final$CRP < 3.0] <- 2.9
+
+# Health2000
+h2000_summary_final <- h2000_summary_final %>%
+  mutate(CRPori = CRP) # Save original CRP for later use
+
+h2000_summary_final$CRP[h2000_summary_final$CRP < 3.0] <- 2.9
+
+#Blood donors
+blood_data_summary_final <- blood_data_summary_final %>%
+  mutate(CRPori = CRP)
+# Save original CRP for later use, this is needed as we will concatenate this later
+```
+
+### Previous childbirth
+
+Previous childbirth is recoded
+* FinDonor: have you given birth? no=no, yes=yes
+* FinRisk97: how many children have you given birth to? 1=none, 2=one, 3=two, 4=three or more
+* Health2000: have you given birth? 0=no, 1=yes
+
+Nulliparous women are coded as 0 (no) and reporting childbirth or giving birth to any number of children as 1 (yes).
+
+```{r}
+# FinDonor
+blood_data_summary_final <- blood_data_summary_final %>%
+  mutate(PreviousChildbirth = case_when(
+    PreviousChildbirth == "no" ~ "no",
+    PreviousChildbirth == "yes" ~ "yes"))
+
+# FinRisk97
+fr1997_summary_final <- fr1997_summary_final %>%
+  mutate(PreviousChildbirth = case_when(
+    PreviousChildbirth == "1" ~ "no",
+    PreviousChildbirth %in% c("2" , "3", "4") ~ "yes"))
+
+h2000_summary_final <- h2000_summary_final %>%
+  mutate(PreviousChildbirth = case_when(
+    PreviousChildbirth == "0" ~ "no",
+    PreviousChildbirth %in% c("1") ~ "yes"))
+
+```
+
+### Hormonal contraception
+
+Hormonal contraception is recoded:
+
+* Findonor 
+Recoding already done 
+
+* FinRisk97 
+Are you presently on the contraceptive pill? 1 = Yes, for n years. 2 = No, but I have earlier used, for n years. 3 = No, I have never used.
+
+* Health2000
+Are you currently using birth control pills? 0 = No. 1 = Yes
+
+```{r}
+# FinRisk97
+fr1997_summary_final <- fr1997_summary_final %>%
+  mutate(HormonalContraception = case_when(
+    HormonalContraception == "1" ~ "yes",
+    HormonalContraception == "2" ~ "no", 
+    HormonalContraception == "3" ~ "no"))
+
+# Health2000
+h2000_summary_final <- h2000_summary_final %>%
+  mutate(HormonalContraception = case_when(
+    HormonalContraception == "1" ~ "yes",
+    HormonalContraception == "0" ~ "no"))
+```
+
+
+<!-- ### Regions -->
+
+<!-- Assign the participants to regions based on university hospital districts. FinDonor study participants all come from the capital region. -->
+
+<!-- Health2000: -->
+<!-- 	1	HYKS   -->
+<!-- 	2	TYKS  -->
+<!-- 	3	TAYS -->
+<!-- 	4	KYS -->
+<!-- 	5	OYS -->
+
+
+<!-- FinRisk97: -->
+<!--   2 North Karelia --> KYS -->
+<!--   3 North Savonia --> KYS -->
+<!--   4 Turku and Loimaa --> TYKS -->
+<!--   5 Helsinki and Vantaa --> HYKS -->
+<!--   6 Oulu province --> OYS -->
+
+<!-- ```{r} -->
+<!-- blood_data_summary_final$Region <- "HYKS" -->
+
+<!-- fr1997_summary_final <- fr1997_summary_final %>%  -->
+<!--   mutate(Region = case_when( -->
+<!--     Region == "2" ~ "KYS", -->
+<!--     Region == "3" ~ "KYS", -->
+<!--     Region == "4" ~ "TYKS", -->
+<!--     Region == "5" ~ "HYKS", -->
+<!--     Region == "6" ~ "OYS")) -->
+
+<!-- h2000_summary_final <- h2000_summary_final %>%  -->
+<!--   mutate(Region = case_when( -->
+<!--     Region == "1" ~ "HYKS", -->
+<!--     Region == "2" ~ "TYKS", -->
+<!--     Region == "3" ~ "TAYS", -->
+<!--     Region == "4" ~ "KYS", -->
+<!--     Region == "5" ~ "OYS")) -->
+<!-- ``` -->
+
+## Merging cohorts into one table 
+
+For the code to work all three cohorts need to be merged into one single table. Before this can be done variables the variables selected need to have the same name.  
+
+```{r}
+### mutate smoking and pregnancy 
+blood_data_summary_final <- blood_data_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age, TwoYearsFromStartCount_FB, DaysToPreviousFB,
+                Ferritin, Hb, BMI, blood_vol, Menstruation, Smoking,
+                CRP, CRPori, Weight, Cohort, origcohort, HormonalContraception, PreviousChildbirth) %>% 
+    mutate(Smoking = ifelse(Smoking == "daily", "yes", "no"),
+         Smoking = factor(Smoking, levels = c( "no",  "yes")))
+
+### mutate smoking and pregnancy 
+fr1997_summary_final <- fr1997_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age, TwoYearsFromStartCount_FB, DaysToPreviousFB,
+                Ferritin, Hb, BMI, blood_vol, Menstruation, Smoking,
+                CRP, CRPori, Weight, Cohort, origcohort, HormonalContraception, PreviousChildbirth) %>% 
+       mutate(Smoking = ifelse(Smoking == "1", "yes", "no"),
+       Smoking = factor(Smoking, levels = c( "no",  "yes")))
+
+### mutate smoking and pregnancy
+h2000_summary_final <- h2000_summary_final %>% 
+  dplyr::select(ID, Group, Sex, Age, TwoYearsFromStartCount_FB, DaysToPreviousFB,
+                Ferritin, Hb, BMI, blood_vol, Menstruation, Smoking,
+                CRP, CRPori, Weight, Cohort, origcohort,HormonalContraception, PreviousChildbirth) %>% 
+         mutate(Smoking = ifelse(Smoking == "1", "yes", "no"),
+         Smoking = factor(Smoking, levels = c( "no",  "yes")))
+         
+
+# merge the cohorts
+
+summary_all_cohorts <- bind_rows(blood_data_summary_final, fr1997_summary_final, h2000_summary_final)
+
+summary_all_cohorts <- summary_all_cohorts %>% 
+     mutate(iron_deficiency = Ferritin < 15) 
+
+file <- "../results/genpop_combined/summary_all_cohorts_genpop_combined.rdata"
+save(summary_all_cohorts,file=file)
+
+```
+
+## Final group N for the summarized table
+
+```{r, warning=FALSE}
+summary_all_cohorts %>% 
+   mutate(Group = dplyr::recode(Group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(Group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+ 
+```
+
+
+## Population description
+
+### Table 1
+
+```{r}
+myVars <- c("Age" ,
+  "Blood volume (l)",
+  "Ferritin (ug/l)",
+  "Iron deficiency",
+  "Smoking",
+  "Childbirth in the past",
+  "Menstruation",
+  "Hormonal contraception",
+  "Donation frequency during past two years",
+  "Number of days since last whole blood donation")
+
+non_normal_vars <- c("Ferritin (ug/l)",  "Number of days since last whole blood donation")
+table1data <- summary_all_cohorts  %>%
+  rename(
+  "Age" = Age,
+  "Blood volume (l)" = blood_vol,
+  "Ferritin (ug/l)" = Ferritin,
+  "Smoking" = Smoking,
+  "Iron deficiency" = iron_deficiency,
+  "Hormonal contraception" = HormonalContraception,
+  "Donation frequency during past two years" = TwoYearsFromStartCount_FB,
+  "Number of days since last whole blood donation" = DaysToPreviousFB,
+  "Menstruation" = Menstruation,
+  "Childbirth in the past" = PreviousChildbirth)
+
+summary_table <- CreateTableOne(data =
+                                  table1data,
+                                vars=myVars,
+                                strata = c("Cohort","Group"),
+                                test = FALSE)
+
+tab3Mat <- print(summary_table,
+                 nonnormal = non_normal_vars,
+                 vars=myVars,
+                 quote = FALSE,
+                 noSpaces = TRUE,
+                 printToggle = FALSE)
+#
+colnames(tab3Mat) <- gsub("\\:",": ",colnames(tab3Mat))
+tab3Mat %>%
+  kable() #%>%
+# kable_styling(
+#   full_width = F,
+#   bootstrap_options = "striped",
+#   font_size = 8) %>%
+#   column_spec(
+#     column = 2:5,
+#     width = '2.5cm'
+#   )
+  write.table(tab3Mat,
+              file = paste0("../results/genpop_combined/table_1.txt_genpop_combined"),sep="\t")
+```
+
+
+# Results - Regression table
+
+## Rename and transform
+
+```{r}
+regression_cohorts <- summary_all_cohorts %>% 
+    rename(donation_count = TwoYearsFromStartCount_FB,
+           last_donation = DaysToPreviousFB) %>% 
+     mutate(Age = Age / 5, 
+            donation_count_2 = donation_count^2,
+            log_ferritin = log(Ferritin),
+            log_last_donation = log(last_donation)/log(2),
+            log_CRP = log(CRP),
+            iron_deficiency = Ferritin < 15) 
+```
+
+Save table
+
+```{r}
+write.table(regression_cohorts, file = paste0("../results/genpop_combined/regressioncohorts_genpop_combined",".txt"))
+
+save(regression_cohorts, file = "../data/ID_data_regression_cohorts_genpop_combined.rdata")
+```
+
+
+Data transformations:
+
+* Ferritin is log transformed
+* Number of days before donation is transformed as $log\_last\_donation = log(last\_donation)/log(2)$ to help with the interpretation of coefficients. An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
+* Standardization:
+    * Standardized coefficients: all dependent and independent variables were standardized
+    * Coefficients: all dependent variables entered as continuous varaibles are centered but not scaled. 
+* All variables entered as continuous are centered
+
+## Premenopausal women
+
+
+```{r, warning=FALSE}
+
+test_data_pre_women <- regression_cohorts %>% 
+  filter(Group == "Pre_menopause_women")
+
+test_data_pre_women <- test_data_pre_women %>% 
+  dplyr::select(ID, Group, Sex, Age, donation_count, last_donation, Ferritin, Hb, BMI, Menstruation, Smoking, CRP, Cohort, origcohort, donation_count_2, log_ferritin, log_last_donation, log_CRP, iron_deficiency, Weight, blood_vol, HormonalContraception) %>%
+  mutate(Age = scale(Age, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         donation_count = scale(donation_count, scale = FALSE)[,1],
+         log_last_donation = scale(log_last_donation, scale = FALSE)[,1],
+         blood_vol = scale(blood_vol, scale = FALSE)[,1],
+         donation_count_2 = donation_count^2) 
+
+```
+
+Save table
+
+```{r}
+write.table(test_data_pre_women, file = paste0("../results/genpop_combined/test_data_pre_women_genpop_combined",".txt"))
+```
+
+
+## Postmenopausal women
+
+```{r, warning=FALSE}
+
+test_data_post_women <- regression_cohorts %>% 
+  filter(Group == "Post_menopause_women") 
+
+test_data_post_women <- test_data_post_women %>% 
+  dplyr::select(ID, Group, Sex, Age, donation_count, last_donation, Ferritin, Hb, BMI, Menstruation, Smoking, CRP, Cohort, origcohort, donation_count_2, log_ferritin, log_last_donation, log_CRP, iron_deficiency, Weight, blood_vol, HormonalContraception) %>%
+  mutate(Age = scale(Age, scale = FALSE)[,1],
+         Weight = scale(Weight, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         donation_count = scale(donation_count, scale = FALSE)[,1],
+         log_last_donation = scale(log_last_donation, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         blood_vol = scale(blood_vol, scale = FALSE)[,1],
+         donation_count_2 = donation_count^2)
+
+```
+
+Save table
+
+```{r}
+write.table(test_data_post_women, file = paste0("../results/genpop_combined/test_data_post_women_genpop_combined",".txt"))
+```
+
+
+## Men
+
+
+```{r, warning=FALSE}
+
+test_data_men <- regression_cohorts %>% 
+  filter(Group == "Men") 
+
+test_data_men <- test_data_men %>% 
+  dplyr::select(ID, Group, Sex, Age, donation_count, last_donation, Ferritin, Hb, BMI, Menstruation, Smoking, CRP, Cohort, origcohort, donation_count_2, log_ferritin, log_last_donation, log_CRP, iron_deficiency, Weight, blood_vol) %>%
+  mutate(Age = scale(Age, scale = FALSE)[,1],
+         Weight = scale(Weight, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         donation_count = scale(donation_count, scale = FALSE)[,1],
+         log_last_donation = scale(log_last_donation, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         blood_vol = scale(blood_vol, scale = FALSE)[,1],
+         donation_count_2 = donation_count^2) 
+
+
+```
+
+Save table
+
+```{r}
+write.table(test_data_men, file = paste0("../results/genpop_combined/test_data_men_genpop_combined",".txt"))
+```
+
+
+## Mutiple regression - ferritin as outcome
+
+### Correlograms
+
+```{r, warning=FALSE}
+# Premenopausal women
+ggpairs(test_data_pre_women, 
+        columns = c("log_ferritin", "iron_deficiency", "Age", "log_CRP",  "donation_count", "donation_count_2",
+                    "log_last_donation", "blood_vol", "Menstruation", "HormonalContraception"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+
+# Postmenopausal women
+ggpairs(test_data_post_women, 
+        columns = c("log_ferritin", "iron_deficiency", "Age", "log_CRP",  "donation_count", "donation_count_2",
+                    "log_last_donation", "blood_vol", "Menstruation", "HormonalContraception"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+
+# Men
+ggpairs(test_data_men, 
+        columns = c("log_ferritin", "iron_deficiency", "Age", "log_CRP",  "donation_count", "donation_count_2",
+                    "log_last_donation", "blood_vol"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+
+
+
+```
+
+```{r, warning=FALSE}
+#same as above, cohorts separated 
+
+# Premenopausal women
+ggpairs(test_data_pre_women, ggplot2::aes(colour = Cohort, alpha = 0.5),
+        columns = c("log_ferritin", "iron_deficiency", "Age", "log_CRP",  "donation_count", "donation_count_2",
+                    "log_last_donation", "blood_vol", "Menstruation", "HormonalContraception"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE) + 
+  ggtitle("Premenopausal women")
+
+# Postmenopausal women
+ggpairs(test_data_post_women, ggplot2::aes(colour = Cohort, alpha = 0.5),
+        columns = c("log_ferritin", "iron_deficiency", "Age", "log_CRP",  "donation_count", "donation_count_2",
+                    "log_last_donation", "blood_vol", "Menstruation", "HormonalContraception"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE) +
+  ggtitle("Postmenopausal women")
+
+# Men
+ggpairs(test_data_men, ggplot2::aes(colour = Cohort, alpha = 0.5),
+        columns = c("log_ferritin", "iron_deficiency", "Age", "log_CRP",  "donation_count", "donation_count_2",
+                    "log_last_donation", "blood_vol"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE) + 
+ggtitle("Men")
+
+```
+
+## Ferritin vs predictors
+
+## Donation variables
+
+### Blood donors 
+
+```{r , warning=FALSE}
+tmp <- regression_cohorts %>% filter(Cohort == "FINDONOR")
+
+ 
+
+threshold <- data.frame(Group = c("Men", "Pre_menopause_women", "Post_menopause_women"),
+
+                       CRP_thresh = c(3, 3,3),
+
+                       Hb_v_thresh = c(134, 117,117),
+
+                       Ferritin_thresh = c(15, 15,15),
+
+                       TransferrinR_thresh = c(5, 4.4, 4.4)) %>%
+
+  mutate(Group = ordered(Group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men")))
+
+ 
+
+ 
+
+plt_1 <- tmp %>%
+
+  dplyr::select(ID, Group, Ferritin,
+
+         donation_count) %>%
+
+  ggplot(aes(x=donation_count, y=Ferritin)) +
+
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+
+  geom_jitter(aes(color = Group), alpha = 0.25, width = 0.2, size = 0.2, height = 0, shape = 1) +
+
+  geom_boxplot(aes(color = Group, group = donation_count), alpha = 0,
+
+               width = 0.4,
+
+               outlier.alpha = 0) +
+
+  facet_grid(Group~.) +
+
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+
+  #                   limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+
+                    limits = c("Pre_menopause_women", "Post_menopause_women", "Men")) +
+
+  theme_bw() +
+
+  theme(legend.position = "none",
+
+        panel.grid.minor = element_blank(),
+
+        panel.grid.major = element_blank(),
+
+       panel.border = element_rect(colour = NA),
+
+        strip.background=element_blank(),
+
+        strip.text = element_blank(),
+
+        axis.line = element_line(colour="black"),
+
+        axis.title.x = element_text(size = 8),
+
+        axis.title.y =element_text(size = 8),
+
+        axis.text = element_text(size = 8)) +
+
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+
+  scale_x_continuous(breaks=c(0, 2, 4,6,8, 10, 12)) +
+
+  xlab("Nb of donations (2 years)") +
+
+  ylab(expression("Ferritin ("*mu* "g/l)")) +
+
+  geom_smooth(method = "lm") +
+
+  geom_smooth()
+
+ 
+
+plt_2 <-tmp %>%
+
+  dplyr::select(ID, Group, Ferritin,
+
+         last_donation) %>%
+
+ ggplot(aes(x=last_donation, y=Ferritin)) +
+
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+
+  geom_point(aes(color = Group), alpha = 0.4,  size = 0.7, shape =1) +
+
+  facet_grid(Group~.,
+
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE))  +
+
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+
+#                     limits = c("Pre-menopausal women", "Post_menopausal women","Men" )) +
+
+limits = c("Pre_menopause_women", "Post_menopause_women", "Men")) +
+
+  theme_bw() +
+
+  theme(legend.position = "none",
+
+        panel.grid.minor = element_blank(),
+
+        panel.grid.major = element_blank(),
+
+        panel.border = element_rect(colour = NA),
+
+        strip.background=element_rect(colour="white",fill="white"),
+
+        strip.text = element_text(face="bold", size = 10),
+
+        axis.line = element_line(colour="black"),
+
+        axis.title.x = element_text(size = 8),
+
+        axis.title.y = element_blank(),
+
+        axis.text = element_text(size = 8)) +
+
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+
+  scale_x_log10(breaks=c(60, 90,180,360,1000)) +
+
+  xlab("Days since last donation") +
+
+  ylab("") +
+
+  geom_smooth(method = "lm") +
+
+  geom_smooth()
+
+ 
+
+ 
+
+plt2 <- cowplot::plot_grid(plt_1, plt_2,  ncol = 2, labels = c("A", "B"))
+
+ 
+
+plt2
+
+ 
+
+cowplot::save_plot("../results/genpop_combined/ferritin_vs_donation_history_blood.png",plt2, base_height = NULL,
+
+          base_aspect_ratio = .5, base_width = 11.5 * .394 ) # make room for figure legend
+
+```
+
+### General population
+
+```{r , warning=FALSE}
+tmp <- regression_cohorts %>% filter(Cohort == "THL")
+
+ 
+
+threshold <- data.frame(Group = c("Men", "Pre_menopause_women", "Post_menopause_women"),
+
+                       CRP_thresh = c(3, 3,3),
+
+                       Hb_v_thresh = c(134, 117,117),
+
+                       Ferritin_thresh = c(15, 15,15),
+
+                       TransferrinR_thresh = c(5, 4.4, 4.4)) %>%
+
+  mutate(Group = ordered(Group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men")))
+
+ 
+
+ 
+
+plt_1 <- tmp %>%
+
+  dplyr::select(ID, Group, Ferritin,
+
+         donation_count) %>%
+
+  ggplot(aes(x=donation_count, y=Ferritin)) +
+
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+
+  geom_jitter(aes(color = Group), alpha = 0.25, width = 0.2, size = 0.2, height = 0, shape = 1) +
+
+  geom_boxplot(aes(color = Group, group = donation_count), alpha = 0,
+
+               width = 0.4,
+
+               outlier.alpha = 0) +
+
+  facet_grid(Group~.) +
+
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+
+  #                   limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+
+                    limits = c("Pre_menopause_women", "Post_menopause_women", "Men")) +
+
+  theme_bw() +
+
+  theme(legend.position = "none",
+
+        panel.grid.minor = element_blank(),
+
+        panel.grid.major = element_blank(),
+
+       panel.border = element_rect(colour = NA),
+
+        strip.background=element_blank(),
+
+        strip.text = element_blank(),
+
+        axis.line = element_line(colour="black"),
+
+        axis.title.x = element_text(size = 8),
+
+        axis.title.y =element_text(size = 8),
+
+        axis.text = element_text(size = 8)) +
+
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+
+  scale_x_continuous(breaks=c(0, 2, 4,6,8, 10, 12)) +
+
+  xlab("Nb of donations (2 years)") +
+
+  ylab(expression("Ferritin ("*mu* "g/l)")) +
+
+  geom_smooth(method = "lm") +
+
+  geom_smooth()
+
+ 
+
+plt_2 <-tmp %>%
+
+  dplyr::select(ID, Group, Ferritin,
+
+         last_donation) %>%
+
+ ggplot(aes(x=last_donation, y=Ferritin)) +
+
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+
+  geom_point(aes(color = Group), alpha = 0.4,  size = 0.7, shape =1) +
+
+  facet_grid(Group~.,
+
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE))  +
+
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+
+#                     limits = c("Pre-menopausal women", "Post_menopausal women","Men" )) +
+
+limits = c("Pre_menopause_women", "Post_menopause_women", "Men")) +
+
+  theme_bw() +
+
+  theme(legend.position = "none",
+
+        panel.grid.minor = element_blank(),
+
+        panel.grid.major = element_blank(),
+
+        panel.border = element_rect(colour = NA),
+
+        strip.background=element_rect(colour="white",fill="white"),
+
+        strip.text = element_text(face="bold", size = 10),
+
+        axis.line = element_line(colour="black"),
+
+        axis.title.x = element_text(size = 8),
+
+        axis.title.y = element_blank(),
+
+        axis.text = element_text(size = 8)) +
+
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+
+  scale_x_log10(breaks=c(60, 90,180,360,1000)) +
+
+  xlab("Days since last donation") +
+
+  ylab("") +
+
+  geom_smooth(method = "lm") +
+
+  geom_smooth()
+
+ 
+
+ 
+
+plt2 <- cowplot::plot_grid(plt_1, plt_2,  ncol = 2, labels = c("A", "B"))
+
+ 
+
+plt2
+
+ 
+
+cowplot::save_plot("../results/genpop_combined/ferritin_vs_donation_history_genpop.png",plt2, base_height = NULL,
+
+          base_aspect_ratio = .5, base_width = 11.5 * .394 ) # make room for figure legend
+
+```
+
+
